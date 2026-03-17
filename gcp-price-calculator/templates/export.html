@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block title %}Export — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}Export & Reports{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Export & Reports</h1>
+  <p>Upload a processed billing CSV to download in multiple formats with customisable options</p>
+</div>
+
+<div class="grid-2" style="gap:24px;align-items:start">
+  <div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><span class="card-title">1. Upload Billing CSV</span></div>
+      <div class="dropzone" id="dropzone" onclick="document.getElementById('file').click()">
+        <span class="dropzone-icon">📂</span>
+        <strong id="dropzone-label">Drop billing CSV here or click to browse</strong>
+        <p style="margin-top:6px;font-size:12px">Discounts will be applied automatically from the matrix</p>
+      </div>
+      <input type="file" id="file" accept=".csv" style="display:none" onchange="onFileChange(this)"/>
+      <button class="btn btn-primary" style="margin-top:14px" onclick="process()">
+        <span>⚡</span> Process & Preview
+      </button>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">2. Export Options</span></div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+
+        <div style="border:1px solid var(--border);border-radius:10px;padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div>
+              <div style="font-weight:600">📊 Excel (XLSX)</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px">Full data + Summary sheet, styled headers</div>
+            </div>
+            <button class="btn btn-green btn-sm" onclick="dlXlsx()">Download</button>
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:10px;padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div>
+              <div style="font-weight:600">📄 CSV</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px">Raw comma-separated values, UTF-8 encoded</div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="dlCsv()">Download</button>
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:10px;padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div>
+              <div style="font-weight:600">📋 JSON</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px">Structured JSON for API / pipeline use</div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="dlJson()">Download</button>
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:10px;padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-weight:600">🖨 Print / PDF</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px">Open print dialog to save as PDF</div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="window.print()">Print</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div id="summary-section" style="display:none">
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-header"><span class="card-title">Summary</span></div>
+        <div class="stats-grid" style="grid-template-columns:1fr 1fr;margin-bottom:0">
+          <div class="stat-card"><div class="stat-label">Total Rows</div><div class="stat-value" id="e-rows">—</div></div>
+          <div class="stat-card"><div class="stat-label">Matched</div><div class="stat-value yellow" id="e-matched">—</div></div>
+          <div class="stat-card"><div class="stat-label">List Cost</div><div class="stat-value" id="e-list">—</div></div>
+          <div class="stat-card"><div class="stat-label">After Discount</div><div class="stat-value green" id="e-after">—</div></div>
+        </div>
+        <div style="margin-top:16px;padding:14px;background:var(--surface2);border-radius:8px;display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--muted);font-size:14px">Total Savings</span>
+          <span class="mono" style="color:var(--yellow);font-size:20px;font-weight:700" id="e-savings">—</span>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-header"><span class="card-title">By Service</span></div>
+        <div class="table-wrap"><table id="svc-tbl">
+          <thead><tr><th>Service</th><th>List</th><th>After</th><th>Saved</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <div id="no-data" class="card" style="text-align:center;padding:60px">
+      <div style="font-size:48px;margin-bottom:16px">📥</div>
+      <p style="color:var(--muted)">Process a file to see export options</p>
+    </div>
+  </div>
+</div>
+
+<div id="preview-wrap" style="display:none;margin-top:24px">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Data Preview</span>
+      <div style="display:flex;gap:8px">
+        <span id="prev-count" class="pill pill-blue"></span>
+        <input type="text" placeholder="Filter preview..." oninput="filterPreview(this.value)" style="padding:4px 10px;font-size:12px;width:180px"/>
+      </div>
+    </div>
+    <div class="table-wrap" style="max-height:380px;overflow-y:auto">
+      <table id="prev-tbl"></table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let resultData=null;
+const overrides=JSON.parse(localStorage.getItem('gcp_overrides')||'{}');
+let allRows=[];
+
+const dz=document.getElementById('dropzone');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover')});
+dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');onFileChange({files:[e.dataTransfer.files[0]]})});
+
+function onFileChange(el){
+  const f=el.files[0];
+  if(f)document.getElementById('dropzone-label').textContent='✓ '+f.name;
+}
+
+async function process(){
+  const fi=document.getElementById('file');
+  if(!fi.files.length){toast('Upload a CSV first','error');return;}
+  const fd=new FormData();fd.append('file',fi.files[0]);fd.append('overrides',JSON.stringify(overrides));
+  try{
+    const res=await fetch('/process',{method:'POST',body:fd});
+    const data=await res.json();
+    if(data.error){toast(data.error,'error');return;}
+    resultData=data;allRows=data.csv_data;
+    showSummary(data);toast('Ready to export!','success');
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+function showSummary(d){
+  document.getElementById('summary-section').style.display='block';
+  document.getElementById('no-data').style.display='none';
+  document.getElementById('preview-wrap').style.display='block';
+  document.getElementById('e-rows').textContent=d.total_rows.toLocaleString();
+  document.getElementById('e-matched').textContent=d.matched_rows.toLocaleString();
+  document.getElementById('e-list').textContent=fmt(d.total_list_cost);
+  document.getElementById('e-after').textContent=fmt(d.total_after_discount);
+  document.getElementById('e-savings').textContent=fmt(d.total_savings);
+  const tbody=document.querySelector('#svc-tbl tbody');
+  tbody.innerHTML=d.service_breakdown.map(s=>`
+    <tr><td>${s['Service description']}</td><td class="mono">${fmt(s.list_cost)}</td>
+    <td class="mono green">${fmt(s.after_discount)}</td>
+    <td class="mono" style="color:var(--yellow)">${fmt(s.savings)}</td></tr>`).join('');
+  renderPreview(d.preview);
+  document.getElementById('prev-count').textContent=`${Math.min(50,d.total_rows)} of ${d.total_rows}`;
+}
+
+const HEADERS=['Service description','SKU description','Usage amount','Usage unit','List cost','(₹)discount %','Discounted value','after Discount'];
+function renderPreview(rows){
+  const tbl=document.getElementById('prev-tbl');
+  tbl.innerHTML='<thead><tr>'+HEADERS.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>'+
+    rows.map(r=>'<tr>'+HEADERS.map(h=>{
+      const v=r[h];
+      if(h==='List cost'||h==='after Discount'||h==='Discounted value')return`<td class="mono">${typeof v==='number'?fmt(v):v}</td>`;
+      if(h==='(₹)discount %')return`<td class="mono"><span class="pill pill-yellow">${v}%</span></td>`;
+      return`<td>${v}</td>`;
+    }).join('')+'</tr>').join('')+'</tbody>';
+}
+
+function filterPreview(q){
+  if(!resultData)return;
+  const filtered=resultData.csv_data.filter(r=>Object.values(r).some(v=>String(v).toLowerCase().includes(q.toLowerCase())));
+  renderPreview(filtered.slice(0,50));
+  document.getElementById('prev-count').textContent=`${Math.min(50,filtered.length)} of ${filtered.length}`;
+}
+
+async function dlXlsx(){
+  if(!resultData){toast('Process a file first','error');return;}
+  const res=await fetch('/download/xlsx',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({data:resultData.csv_data,summary:{total_rows:resultData.total_rows,matched_rows:resultData.matched_rows,total_list_cost:resultData.total_list_cost,total_after_discount:resultData.total_after_discount,total_savings:resultData.total_savings}})});
+  const blob=await res.blob();
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='gcp_discounted_billing.xlsx';a.click();
+  toast('XLSX downloaded!','success');
+}
+async function dlCsv(){
+  if(!resultData){toast('Process a file first','error');return;}
+  const res=await fetch('/download/csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:resultData.csv_data})});
+  const blob=await res.blob();
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='gcp_discounted_billing.csv';a.click();
+  toast('CSV downloaded!','success');
+}
+function dlJson(){
+  if(!resultData){toast('Process a file first','error');return;}
+  const blob=new Blob([JSON.stringify({summary:{total_rows:resultData.total_rows,total_list_cost:resultData.total_list_cost,total_after_discount:resultData.total_after_discount,total_savings:resultData.total_savings},rows:resultData.csv_data},null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='gcp_billing_report.json';a.click();
+  toast('JSON downloaded!','success');
+}
+</script>
+{% endblock %}

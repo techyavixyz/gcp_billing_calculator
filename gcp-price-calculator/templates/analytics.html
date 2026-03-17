@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Analytics — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}Analytics Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Analytics Dashboard</h1>
+  <p>Discount distribution and spend breakdown across GCP services</p>
+</div>
+
+<div class="stats-grid" style="margin-bottom:28px">
+  {% set total_skus = service_stats | sum(attribute='count') %}
+  {% set avg_disc = (service_stats | sum(attribute='avg')) / (service_stats | length) %}
+  <div class="stat-card">
+    <div class="stat-label">Services Tracked</div>
+    <div class="stat-value">{{ service_stats | length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total SKUs</div>
+    <div class="stat-value yellow">{{ sku_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Avg Discount</div>
+    <div class="stat-value green">{{ avg_disc | round(1) }}%</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Max Discount</div>
+    <div class="stat-value">{{ service_stats | map(attribute='max') | max | round(1) }}%</div>
+  </div>
+</div>
+
+<div class="grid-2" style="margin-bottom:24px">
+  <div class="card">
+    <div class="card-header"><span class="card-title">Discount Range by Service</span></div>
+    <div id="bar-chart" style="padding-top:8px"></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">SKU Distribution</span></div>
+    <div id="pie-chart" style="display:flex;flex-direction:column;gap:8px;padding-top:8px"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Service Detail Table</span>
+    <span class="pill pill-blue">{{ service_stats | length }} services</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Service</th><th>SKU Count</th><th>Min Discount</th><th>Avg Discount</th><th>Max Discount</th><th>Coverage</th>
+      </tr></thead>
+      <tbody>
+      {% for s in service_stats | sort(attribute='avg', reverse=True) %}
+      <tr>
+        <td>{{ s['Service description'] }}</td>
+        <td class="mono">{{ s.count }}</td>
+        <td class="mono" style="color:var(--muted)">{{ s.min }}%</td>
+        <td class="mono" style="color:var(--accent)">{{ s.avg }}%</td>
+        <td class="mono" style="color:var(--green)">{{ s.max }}%</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px;min-width:120px">
+            <div class="progress" style="flex:1"><div class="progress-bar" style="width:{{ s.avg }}%"></div></div>
+            <span class="mono" style="font-size:11px;color:var(--muted);width:36px">{{ s.avg }}%</span>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" style="margin-top:24px">
+  <div class="card-header"><span class="card-title">Upload Billing for Live Analytics</span></div>
+  <div class="alert alert-info">
+    <span>ℹ️</span>
+    <div>Upload a billing CSV on the <a href="/" style="color:var(--accent)">Calculator page</a> to see real spend and savings data broken down by service.</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const stats = {{ service_stats | tojson }};
+const palette = ['#00e5ff','#7c3aed','#00ff87','#ffd60a','#ff4d6d','#818cf8','#34d399','#fb923c','#e879f9'];
+
+// Bar chart — discount ranges
+const barChart = document.getElementById('bar-chart');
+const maxDisc = Math.max(...stats.map(s=>s.max));
+barChart.innerHTML = stats.sort((a,b)=>b.avg-a.avg).map((s,i)=>`
+  <div style="margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+      <span style="font-size:13px;color:var(--text)">${s['Service description']}</span>
+      <span class="mono" style="font-size:12px;color:var(--muted)">${s.min}% – ${s.max}%</span>
+    </div>
+    <div style="position:relative;height:28px;background:var(--surface2);border-radius:4px;overflow:hidden">
+      <div style="position:absolute;left:${(s.min/maxDisc)*100}%;width:${((s.max-s.min)/maxDisc)*100}%;height:100%;background:${palette[i%palette.length]}22;border-radius:4px;border:1px solid ${palette[i%palette.length]}44"></div>
+      <div style="position:absolute;left:${(s.avg/maxDisc)*100}%;transform:translateX(-50%);height:100%;width:2px;background:${palette[i%palette.length]}"></div>
+      <div style="position:absolute;left:${(s.avg/maxDisc)*100}%;transform:translateX(-50%) translateY(-28px);font-size:10px;font-family:var(--mono);color:${palette[i%palette.length]};white-space:nowrap">${s.avg}%</div>
+    </div>
+  </div>
+`).join('');
+
+// Pie chart (donut-style list)
+const total = stats.reduce((a,s)=>a+s.count,0);
+const pieChart = document.getElementById('pie-chart');
+pieChart.innerHTML = stats.sort((a,b)=>b.count-a.count).map((s,i)=>`
+  <div style="display:flex;align-items:center;gap:12px">
+    <div style="width:12px;height:12px;border-radius:3px;background:${palette[i%palette.length]};flex-shrink:0"></div>
+    <div style="flex:1">
+      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+        <span style="font-size:13px">${s['Service description']}</span>
+        <span class="mono" style="font-size:12px;color:var(--muted)">${s.count} SKUs</span>
+      </div>
+      <div class="progress"><div class="progress-bar" style="width:${(s.count/total)*100}%;background:${palette[i%palette.length]}"></div></div>
+    </div>
+    <span class="mono" style="font-size:11px;color:var(--muted);width:36px;text-align:right">${((s.count/total)*100).toFixed(0)}%</span>
+  </div>
+`).join('');
+</script>
+{% endblock %}

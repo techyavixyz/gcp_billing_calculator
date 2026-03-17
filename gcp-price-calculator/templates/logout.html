@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Signed Out — GCP Billing Tool</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<meta http-equiv="refresh" content="4;url=/login"/>
+<style>
+:root{
+  --bg:#06090f;--surface:#0d1117;--border:#1e2d3d;
+  --accent:#00e5ff;--accent2:#7c3aed;--text:#e2e8f0;--muted:#64748b;
+  --mono:'Space Mono',monospace;--sans:'DM Sans',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg);color:var(--text);font-family:var(--sans);
+  min-height:100vh;display:flex;align-items:center;justify-content:center;
+}
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:linear-gradient(rgba(0,229,255,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,0.03) 1px,transparent 1px);
+  background-size:40px 40px;
+}
+.card{
+  position:relative;z-index:10;text-align:center;
+  background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  padding:48px 40px;max-width:380px;width:100%;
+  box-shadow:0 24px 80px rgba(0,0,0,0.5);
+}
+.icon{font-size:48px;margin-bottom:20px;display:block}
+h1{font-family:var(--mono);font-size:18px;margin-bottom:8px}
+p{color:var(--muted);font-size:14px;margin-bottom:4px}
+.redirect-note{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:24px;letter-spacing:1px}
+.progress{height:3px;background:#1e2d3d;border-radius:2px;overflow:hidden;margin-top:12px}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));animation:fill 4s linear forwards}
+@keyframes fill{from{width:0}to{width:100%}}
+.btn{
+  display:inline-block;margin-top:24px;padding:10px 24px;border-radius:8px;
+  background:var(--accent);color:#000;font-weight:600;font-size:13px;
+  text-decoration:none;font-family:var(--sans);
+}
+</style>
+</head>
+<body>
+<div class="card">
+  <span class="icon">👋</span>
+  <h1>Signed Out</h1>
+  <p>You've been successfully signed out,</p>
+  <p><strong>{{ username }}</strong>.</p>
+  <a href="/login" class="btn">Sign in again</a>
+  <div class="redirect-note">Redirecting in 4 seconds…</div>
+  <div class="progress"><div class="progress-bar"></div></div>
+</div>
+</body>
+</html>

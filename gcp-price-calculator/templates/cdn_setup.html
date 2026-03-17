@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% block title %}CDN Formula Setup — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}CDN Formula Setup{% endblock %}
+
+{% block content %}
+<style>
+.bucket-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 20px; margin-bottom: 16px; position: relative;
+}
+.bucket-card.inactive { opacity: 0.5; }
+.bucket-card.hit-card  { border-left: 3px solid var(--accent); }
+.bucket-card.miss-card { border-left: 3px solid #f87171; }
+.bucket-card.lookup-card { border-left: 3px solid #a78bfa; }
+.role-badge {
+  display: inline-block; font-family: var(--mono); font-size: 10px;
+  padding: 2px 9px; border-radius: 4px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+}
+.role-hit    { background: rgba(0,229,255,0.12); color: var(--accent); border: 1px solid rgba(0,229,255,0.25); }
+.role-miss   { background: rgba(248,113,113,0.12); color: #f87171; border: 1px solid rgba(248,113,113,0.25); }
+.role-lookup { background: rgba(167,139,250,0.12); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25); }
+.field-label {
+  display: block; font-family: var(--mono); font-size: 10px;
+  letter-spacing: 1.5px; color: var(--muted); text-transform: uppercase; margin-bottom: 6px;
+}
+.field-input {
+  width: 100%; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); padding: 9px 14px; font-size: 13px;
+  font-family: var(--sans); outline: none; box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+.field-input:focus { border-color: var(--accent); }
+textarea.field-input { font-family: var(--mono); font-size: 12px; resize: vertical; }
+.modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+  z-index: 300; align-items: center; justify-content: center; padding: 24px;
+}
+.modal-box {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  width: 100%; max-width: 560px; overflow: hidden; box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+}
+</style>
+
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div>
+    <h1>CDN Formula Setup</h1>
+    <p>Define which SKU keyword patterns map to each CDN cost bucket. Changes take effect immediately on the CDN Calculator page.</p>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <a href="/cdn" class="btn btn-secondary">View CDN Calculator</a>
+    <button class="btn btn-primary" onclick="openModal()">+ Add Bucket</button>
+  </div>
+</div>
+
+<!-- Info card -->
+<div class="card" style="margin-bottom:24px;background:rgba(0,229,255,0.04);border:1px solid rgba(0,229,255,0.15)">
+  <div style="font-family:var(--mono);font-size:11px;color:var(--accent);font-weight:700;margin-bottom:10px;letter-spacing:1px;text-transform:uppercase">How buckets work</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;font-size:13px;color:var(--muted)">
+    <div><strong style="color:var(--text)">SKU Patterns</strong> — one substring per line. A billing row is included if its SKU description contains any of these strings (case-insensitive).</div>
+    <div><strong style="color:var(--text)">Bucket Role</strong> — <span style="color:var(--accent)">hit</span> = cache egress data, <span style="color:#f87171">miss</span> = cache fill / downloads, <span style="color:#a78bfa">lookup</span> = request counts.</div>
+    <div><strong style="color:var(--text)">Lookup Divisor</strong> — for lookup buckets only. Usage amount is divided by this to get "units" (e.g. 10,000 = price per 10k requests).</div>
+    <div><strong style="color:var(--text)">Require list_cost > 0</strong> — when on, free rows (list cost = 0) are excluded from this bucket. Recommended for hit/miss, off for lookups.</div>
+  </div>
+</div>
+
+<!-- Bucket list -->
+<div id="bucket-list">
+  {% for b in buckets %}
+  <div class="bucket-card {{ b.bucket_role }}-card {% if not b.is_active %}inactive{% endif %}" id="bcard-{{ b.id }}">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:15px;font-weight:600;color:var(--text)">{{ b.bucket_name }}</span>
+        <span class="role-badge role-{{ b.bucket_role }}">{{ b.bucket_role }}</span>
+        {% if not b.is_active %}
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 7px">inactive</span>
+        {% endif %}
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">order: {{ b.sort_order }}</span>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="editBucket({{ b | tojson }})">Edit</button>
+        <button class="btn btn-sm" onclick="deleteBucket({{ b.id }}, '{{ b.bucket_name | e }}')"
+          style="background:rgba(255,77,109,0.12);color:var(--red);border:1px solid rgba(255,77,109,0.3)">Delete</button>
+      </div>
+    </div>
+
+    <!-- Pattern tags -->
+    <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px">
+      {% for pat in b.sku_patterns.splitlines() if pat.strip() %}
+      <span style="font-family:var(--mono);font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 9px;color:var(--text)">{{ pat.strip() }}</span>
+      {% endfor %}
+    </div>
+
+    <!-- Meta row -->
+    <div style="margin-top:10px;display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--muted)">
+      {% if b.require_list_cost_gt_zero %}
+      <span style="color:var(--green)">list_cost &gt; 0 required</span>
+      {% else %}
+      <span>list_cost = 0 allowed</span>
+      {% endif %}
+      {% if b.bucket_role == 'lookup' and b.lookup_divisor %}
+      <span style="color:#a78bfa">divisor: {{ '{:,.0f}'.format(b.lookup_divisor) }}</span>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="text-align:center;padding:48px">
+    <div style="font-size:36px;margin-bottom:12px;opacity:0.4">&#8709;</div>
+    <h2 style="font-size:16px;margin-bottom:6px">No buckets configured</h2>
+    <p style="color:var(--muted);font-size:13px">Add your first bucket to start classifying CDN SKUs</p>
+    <button class="btn btn-primary" style="margin-top:16px" onclick="openModal()">+ Add Bucket</button>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Add / Edit Modal -->
+<div id="bucket-modal" class="modal-overlay">
+  <div class="modal-box">
+    <div style="background:linear-gradient(135deg,#1e3a5f,#1a56db);padding:22px 24px;display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:15px;font-weight:700;color:#fff" id="modal-title">Add Bucket</div>
+      <button onclick="closeModal()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;width:28px;height:28px;border-radius:7px;cursor:pointer;font-size:16px">&#x2715;</button>
+    </div>
+    <div style="padding:24px;display:flex;flex-direction:column;gap:16px">
+      <input type="hidden" id="edit-id"/>
+
+      <div>
+        <label class="field-label">Bucket Name</label>
+        <input type="text" id="edit-name" class="field-input" placeholder="e.g. Total Hit GB"/>
+      </div>
+
+      <div>
+        <label class="field-label">Bucket Role</label>
+        <select id="edit-role" class="field-input" onchange="onRoleChange()">
+          <option value="hit">hit — cache egress / data transfer out</option>
+          <option value="miss">miss — cache fill / downloads</option>
+          <option value="lookup">lookup — request count</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="field-label">SKU Patterns <span style="font-weight:400">(one substring per line, case-insensitive)</span></label>
+        <textarea id="edit-patterns" class="field-input" rows="6" placeholder="e.g.
+networking cloud cdn traffic cache data transfer
+network internet data transfer out"></textarea>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div>
+          <label class="field-label">Sort Order</label>
+          <input type="number" id="edit-sort" class="field-input" value="0" min="0"/>
+        </div>
+        <div id="divisor-field">
+          <label class="field-label">Lookup Divisor</label>
+          <input type="number" id="edit-divisor" class="field-input" value="10000" min="1"/>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:20px;align-items:center">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+          <input type="checkbox" id="edit-list-cost" checked style="width:16px;height:16px;accent-color:var(--accent)"/>
+          <span>Require list_cost &gt; 0</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+          <input type="checkbox" id="edit-active" checked style="width:16px;height:16px;accent-color:var(--accent)"/>
+          <span>Active</span>
+        </label>
+      </div>
+
+      <div id="modal-error" style="display:none;font-family:var(--mono);font-size:11px;color:var(--red);background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.25);border-radius:6px;padding:10px 14px"></div>
+
+      <div style="display:flex;gap:10px;padding-top:4px">
+        <button class="btn btn-primary" onclick="saveBucket()" id="save-btn">Save Bucket</button>
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Delete confirm modal -->
+<div id="del-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:400;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;max-width:420px;width:90%">
+    <div style="font-family:var(--mono);font-size:11px;color:var(--red);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px">Confirm Delete</div>
+    <div id="del-name" style="font-size:14px;color:var(--text);margin-bottom:20px"></div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-sm" id="del-confirm-btn" style="background:var(--red);color:#fff;border-color:var(--red)">Delete</button>
+      <button class="btn btn-secondary btn-sm" onclick="closeDelModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Modal open/close ─────────────────────────────────────────────────────────
+function openModal(b) {
+  document.getElementById('modal-title').textContent = b ? 'Edit Bucket' : 'Add Bucket';
+  document.getElementById('edit-id').value        = b ? b.id : '';
+  document.getElementById('edit-name').value      = b ? b.bucket_name : '';
+  document.getElementById('edit-role').value      = b ? b.bucket_role : 'hit';
+  document.getElementById('edit-patterns').value  = b ? b.sku_patterns : '';
+  document.getElementById('edit-sort').value      = b ? b.sort_order : 0;
+  document.getElementById('edit-divisor').value   = (b && b.lookup_divisor) ? b.lookup_divisor : 10000;
+  document.getElementById('edit-list-cost').checked = b ? b.require_list_cost_gt_zero : true;
+  document.getElementById('edit-active').checked    = b ? b.is_active : true;
+  document.getElementById('modal-error').style.display = 'none';
+  onRoleChange();
+  document.getElementById('bucket-modal').style.display = 'flex';
+  document.getElementById('edit-name').focus();
+}
+
+function editBucket(b) { openModal(b); }
+
+function closeModal() { document.getElementById('bucket-modal').style.display = 'none'; }
+
+function onRoleChange() {
+  const role = document.getElementById('edit-role').value;
+  document.getElementById('divisor-field').style.display = role === 'lookup' ? '' : 'none';
+}
+
+// ── Save ─────────────────────────────────────────────────────────────────────
+async function saveBucket() {
+  const name     = document.getElementById('edit-name').value.trim();
+  const patterns = document.getElementById('edit-patterns').value.trim();
+  if (!name)     { showErr('Bucket name is required'); return; }
+  if (!patterns) { showErr('At least one SKU pattern is required'); return; }
+
+  const role = document.getElementById('edit-role').value;
+  const payload = {
+    id:                        document.getElementById('edit-id').value || null,
+    bucket_name:               name,
+    bucket_role:               role,
+    sku_patterns:              patterns,
+    sort_order:                parseInt(document.getElementById('edit-sort').value) || 0,
+    lookup_divisor:            role === 'lookup' ? parseFloat(document.getElementById('edit-divisor').value) || 10000 : null,
+    require_list_cost_gt_zero: document.getElementById('edit-list-cost').checked,
+    is_active:                 document.getElementById('edit-active').checked,
+  };
+
+  const btn = document.getElementById('save-btn');
+  btn.textContent = 'Saving...'; btn.disabled = true;
+  try {
+    const res  = await fetch('/api/cdn/buckets/save', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.error) { showErr(data.error); return; }
+    closeModal();
+    toast('Bucket saved', 'success');
+    setTimeout(() => location.reload(), 600);
+  } catch(e) { showErr('Network error: ' + e.message); }
+  finally { btn.textContent = 'Save Bucket'; btn.disabled = false; }
+}
+
+function showErr(msg) {
+  const el = document.getElementById('modal-error');
+  el.textContent = msg; el.style.display = '';
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+let delTarget = null;
+function deleteBucket(id, name) {
+  delTarget = id;
+  document.getElementById('del-name').textContent = `Delete bucket "${name}"? This cannot be undone.`;
+  document.getElementById('del-modal').style.display = 'flex';
+  document.getElementById('del-confirm-btn').onclick = async () => {
+    try {
+      const res  = await fetch(`/api/cdn/buckets/${delTarget}/delete`, {method:'POST'});
+      const data = await res.json();
+      if (data.error) { toast(data.error, 'error'); return; }
+      closeDelModal();
+      toast('Bucket deleted', 'success');
+      setTimeout(() => location.reload(), 500);
+    } catch(e) { toast('Error: ' + e.message, 'error'); }
+  };
+}
+function closeDelModal() { document.getElementById('del-modal').style.display = 'none'; delTarget = null; }
+
+// Close modals on overlay click
+document.getElementById('bucket-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+document.getElementById('del-modal').addEventListener('click',    e => { if (e.target === e.currentTarget) closeDelModal(); });
+</script>
+{% endblock %}

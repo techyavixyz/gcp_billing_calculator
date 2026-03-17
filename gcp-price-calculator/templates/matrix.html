@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Discount Matrix — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}Discount Matrix{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Discount Matrix</h1>
+  <p>Browse all {{ sku_count }} SKUs and their assigned discount percentages</p>
+</div>
+
+<div class="stats-grid" style="margin-bottom:24px">
+  {% set services_list = skus | map(attribute='service') | list | unique | list %}
+  <div class="stat-card">
+    <div class="stat-label">Total SKUs</div>
+    <div class="stat-value">{{ sku_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Services</div>
+    <div class="stat-value yellow">{{ services | length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Max Discount</div>
+    <div class="stat-value green">{{ skus | map(attribute='discount_pct') | max | round(1) }}%</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Avg Discount</div>
+    <div class="stat-value">
+      {% set total = skus | sum(attribute='discount_pct') %}
+      {{ (total / sku_count) | round(1) }}%
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="filter-row">
+    <div class="search-bar" style="flex:1;max-width:360px">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search" placeholder="Search SKU or service..." oninput="filterTable()"/>
+    </div>
+    <select id="svc-filter" onchange="filterTable()" style="width:auto;min-width:180px">
+      <option value="">All Services</option>
+      {% for s in services %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    </select>
+    <select id="disc-filter" onchange="filterTable()" style="width:auto;min-width:160px">
+      <option value="">Any Discount</option>
+      <option value="0">No Discount (0%)</option>
+      <option value="low">Low (1–20%)</option>
+      <option value="mid">Medium (21–50%)</option>
+      <option value="high">High (51%+)</option>
+    </select>
+    <span id="row-count" class="pill pill-blue">{{ sku_count }} SKUs</span>
+  </div>
+
+  <div class="table-wrap" style="max-height:600px;overflow-y:auto">
+    <table id="matrix-table">
+      <thead>
+        <tr>
+          <th style="cursor:pointer" onclick="sortBy('service')">Service ↕</th>
+          <th style="cursor:pointer" onclick="sortBy('sku')">SKU Description ↕</th>
+          <th style="cursor:pointer;text-align:right" onclick="sortBy('disc')">Discount ↕</th>
+          <th>Tier</th>
+        </tr>
+      </thead>
+      <tbody id="matrix-body"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const rawSkus = {{ skus | tojson }};
+let filtered=[...rawSkus];
+let sortKey='service',sortDir=1;
+
+const svcColors={
+  'Compute Engine':'pill-blue','Networking':'pill-purple',
+  'Cloud Storage':'pill-yellow','BigQuery':'pill-green',
+  'Kubernetes Engine':'pill-blue','Cloud Monitoring':'pill-purple',
+  'Cloud Logging':'pill-yellow','Cloud DNS':'pill-green',
+  'Certificate Manager':'pill-purple'
+};
+
+function tierLabel(d){
+  if(d===0)return'<span class="pill" style="background:rgba(100,116,139,0.15);color:var(--muted);border:1px solid var(--border)">None</span>';
+  if(d<=20)return'<span class="pill pill-yellow">Low</span>';
+  if(d<=50)return'<span class="pill pill-blue">Medium</span>';
+  return'<span class="pill pill-green">High</span>';
+}
+
+function render(){
+  const tbody=document.getElementById('matrix-body');
+  tbody.innerHTML=filtered.map(s=>`
+    <tr>
+      <td><span class="pill ${svcColors[s.service]||'pill-blue'}">${s.service}</span></td>
+      <td class="mono" style="font-size:12px;max-width:480px;word-break:break-word">${s.sku}</td>
+      <td style="text-align:right">
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px">
+          <div style="width:80px">
+            <div class="progress"><div class="progress-bar" style="width:${s.discount_pct}%"></div></div>
+          </div>
+          <span class="mono" style="color:${s.discount_pct>50?'var(--green)':s.discount_pct>20?'var(--accent)':'var(--muted)';width:48px;text-align:right">${s.discount_pct}%</span>
+        </div>
+      </td>
+      <td>${tierLabel(s.discount_pct)}</td>
+    </tr>`).join('');
+  document.getElementById('row-count').textContent=filtered.length+' SKUs';
+}
+
+function filterTable(){
+  const q=document.getElementById('search').value.toLowerCase();
+  const svc=document.getElementById('svc-filter').value;
+  const disc=document.getElementById('disc-filter').value;
+  filtered=rawSkus.filter(s=>{
+    if(q&&!s.sku.toLowerCase().includes(q)&&!s.service.toLowerCase().includes(q))return false;
+    if(svc&&s.service!==svc)return false;
+    if(disc==='0'&&s.discount_pct!==0)return false;
+    if(disc==='low'&&(s.discount_pct<1||s.discount_pct>20))return false;
+    if(disc==='mid'&&(s.discount_pct<21||s.discount_pct>50))return false;
+    if(disc==='high'&&s.discount_pct<=50)return false;
+    return true;
+  });
+  sortAndRender();
+}
+
+function sortBy(key){
+  if(sortKey===key)sortDir*=-1;
+  else{sortKey=key;sortDir=1;}
+  sortAndRender();
+}
+function sortAndRender(){
+  filtered.sort((a,b)=>{
+    let av=sortKey==='disc'?a.discount_pct:sortKey==='sku'?a.sku:a.service;
+    let bv=sortKey==='disc'?b.discount_pct:sortKey==='sku'?b.sku:b.service;
+    return typeof av==='string'?av.localeCompare(bv)*sortDir:(av-bv)*sortDir;
+  });
+  render();
+}
+
+sortAndRender();
+</script>
+{% endblock %}

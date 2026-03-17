@@ -1,0 +1,786 @@
+{% extends "base.html" %}
+{% block title %}Billing Dashboard — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}Billing Dashboard{% endblock %}
+
+{% block content %}
+<style>
+/* ── Dashboard overrides ──────────────────────────────────────────── */
+.db-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+.db-header-left{display:flex;align-items:center;gap:14px}
+.db-gcp-logo{width:40px;height:40px;border-radius:10px;flex-shrink:0;background:linear-gradient(135deg,#4285F4 0%,#34A853 33%,#FBBC04 66%,#EA4335 100%);display:flex;align-items:center;justify-content:center;font-size:20px}
+.db-title{font-size:22px;font-weight:700;letter-spacing:-.4px;color:var(--text)}
+.db-subtitle{font-size:11px;color:var(--muted);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.live-badge{display:flex;align-items:center;gap:6px;background:rgba(0,255,135,.08);border:1px solid rgba(0,255,135,.25);border-radius:20px;padding:4px 12px}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:livepulse 2s infinite}
+@keyframes livepulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(0,255,135,.6)}50%{opacity:.7;box-shadow:0 0 0 6px rgba(0,255,135,0)}}
+.period-pill{font-family:var(--mono);font-size:12px;color:var(--accent);background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.2);border-radius:8px;padding:6px 14px}
+
+/* Filter bar */
+.filter-bar{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;position:relative}
+.filter-divider{width:1px;height:28px;background:var(--border);flex-shrink:0}
+.mode-btn{padding:7px 18px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:13px;font-weight:600;font-family:var(--sans);transition:all .2s}
+.mode-btn.active{background:var(--accent);color:#000;border-color:var(--accent)}
+.sub-btn{padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:12px;font-weight:600;font-family:var(--sans);transition:all .2s}
+.sub-btn.active{background:rgba(0,229,255,.12);color:var(--accent);border-color:rgba(0,229,255,.4)}
+.filter-select{background:var(--surface2);border:1px solid var(--border);color:var(--accent);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:var(--sans)}
+.date-range-inputs{display:flex;align-items:center;gap:8px}
+.date-range-inputs input[type=date]{background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px 10px;font-size:12px;width:148px;font-family:var(--mono);outline:none;cursor:pointer}
+.date-range-inputs input[type=date]:focus{border-color:var(--accent)}
+.date-range-inputs span{color:var(--muted);font-size:12px}
+
+/* KPI — 3 cards */
+.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+@media(max-width:900px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.kpi-grid{grid-template-columns:1fr}}
+.kpi-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 22px;position:relative;overflow:hidden}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--kpi-color,var(--accent)),transparent)}
+.kpi-label{font-size:10px;font-family:var(--mono);color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.kpi-value{font-size:28px;font-weight:800;color:var(--text);font-family:var(--mono);letter-spacing:-1px;margin-bottom:3px}
+.kpi-full{font-size:11px;color:var(--muted);margin-bottom:6px}
+.kpi-delta{font-size:12px;display:flex;align-items:center;gap:4px}
+.delta-up{color:var(--red)}.delta-down{color:var(--green)}
+
+/* Charts layout */
+.charts-row{display:grid;grid-template-columns:1fr 360px;gap:20px;margin-bottom:24px}
+@media(max-width:1050px){.charts-row{grid-template-columns:1fr}}
+.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px}
+.chart-title{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between}
+
+/* Service cards */
+.svc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+@media(max-width:900px){.svc-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.svc-grid{grid-template-columns:1fr}}
+.svc-card{border-radius:14px;padding:18px 20px;position:relative;overflow:hidden;background:var(--surface);transition:transform .2s}
+.svc-card:hover{transform:translateY(-2px)}
+.svc-glow{position:absolute;top:0;right:0;width:80px;height:80px;border-radius:0 14px 0 100%;opacity:.18}
+.svc-name{font-size:10px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
+.svc-icon{font-size:22px;position:absolute;top:18px;right:20px}
+.svc-value{font-size:20px;font-weight:800;font-family:var(--mono);color:var(--text);margin-bottom:2px}
+.svc-sub{font-size:11px;color:var(--muted);margin-bottom:10px}
+.svc-bar-bg{height:4px;background:var(--surface2);border-radius:2px;overflow:hidden}
+.svc-bar-fill{height:100%;border-radius:2px;transition:width .8s ease}
+.svc-pct{font-size:10px;margin-top:5px;display:flex;justify-content:space-between}
+
+/* Donut legend */
+.donut-legend{margin-top:10px;display:flex;flex-direction:column;gap:7px}
+.donut-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.donut-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.donut-name{font-size:11px;color:var(--muted);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.donut-val{font-size:11px;font-family:var(--mono);color:var(--text);font-weight:600}
+.donut-pct{font-size:10px;color:var(--muted);width:38px;text-align:right}
+
+/* Tooltip */
+.chart-tooltip{position:absolute;pointer-events:none;display:none;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:12px;z-index:200;min-width:180px;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+.tooltip-label{color:var(--muted);font-weight:600;margin-bottom:6px;font-family:var(--mono);font-size:11px}
+.tooltip-row{display:flex;justify-content:space-between;gap:16px;margin-bottom:3px}
+
+/* Bar chart */
+.bar-chart-wrap{position:relative}
+#bar-svg{display:block;width:100%;overflow:visible}
+
+/* SKU table */
+.sku-table{width:100%;border-collapse:collapse;font-size:12px}
+.sku-table th{padding:8px 12px;text-align:left;font-family:var(--mono);font-size:9px;letter-spacing:1px;color:var(--muted);text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap}
+.sku-table th.r,.sku-table td.r{text-align:right}
+.sku-table td{padding:9px 12px;border-bottom:1px solid rgba(30,45,61,.4);color:var(--text);vertical-align:top}
+.sku-table tr:last-child td{border-bottom:none}
+.sku-table tr:hover td{background:rgba(0,229,255,.03)}
+
+/* Skeleton */
+.skeleton{background:linear-gradient(90deg,var(--surface2) 25%,var(--border) 50%,var(--surface2) 75%);background-size:200%;animation:shimmer 1.5s infinite;border-radius:6px}
+@keyframes shimmer{0%{background-position:200%}100%{background-position:-200%}}
+.sk-num{height:32px;width:140px;margin-bottom:4px}
+.sk-txt{height:12px;width:80px}
+
+/* No-data */
+.no-data{display:flex;flex-direction:column;align-items:center;justify-content:center;height:160px;color:var(--muted);gap:8px;font-size:13px}
+.no-data-icon{font-size:32px;opacity:.4}
+</style>
+
+<!-- ── Header ── -->
+<div class="db-header">
+  <div class="db-header-left">
+    <div class="db-gcp-logo">☁</div>
+    <div>
+      <div class="db-title">GCP Billing Dashboard</div>
+      <div class="db-subtitle">Aggregated from Billing History</div>
+    </div>
+    <div class="live-badge">
+      <div class="live-dot"></div>
+      <span style="font-size:11px;color:var(--green);font-weight:700;font-family:var(--mono);letter-spacing:.5px">LIVE</span>
+    </div>
+  </div>
+  <div id="period-pill" class="period-pill">Loading…</div>
+</div>
+
+<!-- ── Filter Bar ── -->
+<div class="filter-bar">
+  <div style="display:flex;gap:8px">
+    <button class="mode-btn" id="btn-monthly" onclick="setMode('monthly')">Monthly</button>
+    <button class="mode-btn" id="btn-weekly"  onclick="setMode('weekly')">Weekly</button>
+    <button class="mode-btn" id="btn-daily"   onclick="setMode('daily')">Daily</button>
+  </div>
+  <div class="filter-divider"></div>
+  <div id="filter-sub" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"></div>
+</div>
+
+<!-- ── KPI: List Cost / After Discount / Total Savings ── -->
+<div class="kpi-grid" id="kpi-grid">
+  <div class="kpi-card" style="--kpi-color:#00e5ff">
+    <div class="kpi-label">List Cost <span>🧾</span></div>
+    <div class="skeleton sk-num"></div><div class="skeleton sk-txt"></div>
+  </div>
+  <div class="kpi-card" style="--kpi-color:#00ff87">
+    <div class="kpi-label">After Discount <span>✅</span></div>
+    <div class="skeleton sk-num"></div><div class="skeleton sk-txt"></div>
+  </div>
+  <div class="kpi-card" style="--kpi-color:#ffd60a">
+    <div class="kpi-label">Total Savings <span>💰</span></div>
+    <div class="skeleton sk-num"></div><div class="skeleton sk-txt"></div>
+  </div>
+</div>
+
+<!-- ── Cost Trend by Service + Donut ── -->
+<div class="charts-row">
+  <div class="chart-card">
+    <div class="chart-title">
+      <span>Cost Trend by Service</span>
+      <span id="area-svc-count" style="font-size:10px;color:var(--muted)"></span>
+    </div>
+    <div id="area-legend" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px"></div>
+    <div style="position:relative">
+      <svg id="area-svg" style="display:block;width:100%" height="260"></svg>
+      <div id="area-tooltip" class="chart-tooltip"></div>
+    </div>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Service Breakdown</div>
+    <div style="display:flex;justify-content:center;margin-bottom:4px">
+      <svg id="donut-svg" width="200" height="170"></svg>
+    </div>
+    <div class="donut-legend" id="donut-legend"></div>
+  </div>
+</div>
+
+<!-- ── Service Cards ── -->
+<div class="svc-grid" id="svc-grid">
+  {% for i in range(6) %}
+  <div class="svc-card">
+    <div class="skeleton sk-txt" style="width:60%;margin-bottom:12px"></div>
+    <div class="skeleton sk-num"></div>
+    <div class="skeleton sk-txt" style="margin-top:8px"></div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- ── Cost Trend by SKU + SKU Table ── -->
+<div class="charts-row">
+  <div class="chart-card">
+    <div class="chart-title">
+      <span>Cost Trend by SKU (Top 8)</span>
+      <span style="font-size:10px;color:var(--muted)">After Discount</span>
+    </div>
+    <div id="sku-legend" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px"></div>
+    <div style="position:relative">
+      <svg id="sku-area-svg" style="display:block;width:100%" height="240"></svg>
+      <div id="sku-area-tooltip" class="chart-tooltip"></div>
+    </div>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Top SKUs by Cost</div>
+    <div id="sku-table-wrap" style="overflow-x:auto;max-height:320px;overflow-y:auto">
+      <div class="no-data"><div class="no-data-icon">⏳</div>Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Bar Chart – Total Cost per Day ── -->
+<div class="chart-card" style="margin-bottom:20px;margin-top:24px">
+  <div class="chart-title">
+    <span>Total Cost per Day</span>
+    <div style="display:flex;gap:14px;align-items:center">
+      <span style="font-size:10px;display:flex;align-items:center;gap:5px"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:linear-gradient(180deg,#00e5ff,rgba(0,229,255,.3))"></span>After Discount</span>
+      <span style="font-size:10px;display:flex;align-items:center;gap:5px"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgba(255,214,10,.35);border:1px solid #ffd60a88"></span>List Cost</span>
+    </div>
+  </div>
+  <div class="bar-chart-wrap">
+    <svg id="bar-svg" height="200"></svg>
+    <div id="bar-tooltip" class="chart-tooltip"></div>
+  </div>
+</div>
+
+<!-- ── Footer ── -->
+<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:4px;flex-wrap:wrap;gap:6px">
+  <span>All costs in Indian Rupees (₹) · Aggregated from billing_runs + billing_run_services + billing_run_rows</span>
+  <span id="last-updated"></span>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ══════════════════════════════════════════════════════════════
+   CONSTANTS
+══════════════════════════════════════════════════════════════ */
+const SVC_META = [
+  {name:"Compute Engine",    color:"#4285F4", icon:"⚙️"},
+  {name:"Cloud Storage",     color:"#34A853", icon:"🗄️"},
+  {name:"Cloud SQL",         color:"#EA4335", icon:"🛢️"},
+  {name:"Kubernetes Engine", color:"#FBBC04", icon:"☸️"},
+  {name:"Cloud CDN",         color:"#00BCD4", icon:"🌐"},
+  {name:"BigQuery",          color:"#9C27B0", icon:"📊"},
+];
+const SKU_PALETTE = ["#00e5ff","#7c3aed","#00ff87","#ffd60a","#ff4d6d","#818cf8","#34d399","#fb923c"];
+
+/* ══════════════════════════════════════════════════════════════
+   INR FORMATTERS
+══════════════════════════════════════════════════════════════ */
+function fmtINR(v){
+  const n = Math.abs(+v);
+  if(n >= 10000000) return `₹${(n/10000000).toFixed(2)}Cr`;
+  if(n >= 100000)   return `₹${(n/100000).toFixed(2)}L`;
+  if(n >= 1000)     return `₹${(n/1000).toFixed(1)}K`;
+  return `₹${n.toFixed(0)}`;
+}
+function fmtFull(v){ return "₹" + Math.round(+v).toLocaleString("en-IN"); }
+
+/* ══════════════════════════════════════════════════════════════
+   DATE HELPERS
+══════════════════════════════════════════════════════════════ */
+function isoToday(){ return new Date().toISOString().slice(0,10); }
+function addDays(iso, n){
+  const d = new Date(iso+"T00:00:00"); d.setDate(d.getDate()+n);
+  return d.toISOString().slice(0,10);
+}
+function startOfMonth(iso){
+  const d = new Date(iso+"T00:00:00");
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-01`;
+}
+function endOfMonthISO(iso){
+  const d = new Date(iso+"T00:00:00");
+  return new Date(d.getFullYear(), d.getMonth()+1, 0).toISOString().slice(0,10);
+}
+function fmtLabel(iso){
+  return new Date(iso+"T00:00:00").toLocaleDateString("en-IN",{day:"2-digit",month:"short"});
+}
+function humanPeriod(s, e){
+  const o = {day:"2-digit",month:"short",year:"numeric"};
+  if(s === e) return new Date(s+"T00:00:00").toLocaleDateString("en-IN",o);
+  return new Date(s+"T00:00:00").toLocaleDateString("en-IN",o)
+       + " – "
+       + new Date(e+"T00:00:00").toLocaleDateString("en-IN",o);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   STATE
+══════════════════════════════════════════════════════════════ */
+const today    = isoToday();
+let mode       = "daily";       // will be confirmed after boot
+let monthSub   = "current";
+let weeklySub  = "last30";
+let selMonth   = today.slice(0,7);
+let customStart= today;
+let customEnd  = today;
+let latestDate = today;
+
+/* ══════════════════════════════════════════════════════════════
+   MONTH OPTIONS  (last 15 months)
+══════════════════════════════════════════════════════════════ */
+const MONTH_OPTIONS = (()=>{
+  const opts = [];
+  const d = new Date(today+"T00:00:00");
+  for(let i=0;i<15;i++){
+    const v = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    const l = d.toLocaleDateString("en-IN",{month:"short",year:"numeric"});
+    opts.push([v,l]);
+    d.setMonth(d.getMonth()-1);
+  }
+  return opts;
+})();
+
+/* ══════════════════════════════════════════════════════════════
+   COMPUTE RANGE
+══════════════════════════════════════════════════════════════ */
+function getRange(){
+  if(mode === "daily") return {start: customStart, end: customEnd};
+  if(mode === "weekly"){
+    if(weeklySub === "custom") return {start: customStart, end: customEnd};
+    const days = weeklySub==="last7"?6 : weeklySub==="last15"?14 : 29;
+    return {start: addDays(latestDate, -days), end: latestDate};
+  }
+  // monthly
+  if(monthSub === "current"){
+    return {start: startOfMonth(latestDate), end: latestDate};
+  }
+  if(monthSub === "bymonth"){
+    const iso = `${selMonth}-01`;
+    const e   = endOfMonthISO(iso);
+    return {start: iso, end: e > today ? today : e};
+  }
+  return {start: customStart, end: customEnd};
+}
+
+/* ══════════════════════════════════════════════════════════════
+   FILTER UI
+══════════════════════════════════════════════════════════════ */
+function renderFilterSub(){
+  const el = document.getElementById("filter-sub");
+  const dateInputs = `
+    <div class="date-range-inputs">
+      <input type="date" value="${customStart}" max="${today}" onchange="customStart=this.value;loadData()">
+      <span>→</span>
+      <input type="date" value="${customEnd}" max="${today}" onchange="customEnd=this.value;loadData()">
+    </div>`;
+
+  if(mode === "daily"){
+    el.innerHTML = `<span style="font-size:12px;color:var(--muted)">Date Range:</span>${dateInputs}`;
+    return;
+  }
+  if(mode === "weekly"){
+    el.innerHTML = [["last7","Last 7 Days"],["last15","Last 15 Days"],["last30","Last 30 Days"],["custom","Custom"]]
+      .map(([k,l])=>`<button class="sub-btn${weeklySub===k?" active":""}" onclick="weeklySub='${k}';renderFilterSub();${k!=="custom"?"loadData()":""}">${l}</button>`).join("")
+      + (weeklySub==="custom" ? dateInputs : "");
+    return;
+  }
+  // monthly
+  el.innerHTML = [["current","Current Month"],["bymonth","By Month"],["custom","Custom Range"]]
+    .map(([k,l])=>`<button class="sub-btn${monthSub===k?" active":""}" onclick="monthSub='${k}';renderFilterSub();${k!=="custom"?"loadData()":""}">${l}</button>`).join("")
+    + (monthSub==="bymonth" ? `<select class="filter-select" onchange="selMonth=this.value;loadData()">${MONTH_OPTIONS.map(([v,l])=>`<option value="${v}"${selMonth===v?" selected":""}>${l}</option>`).join("")}</select>` : "")
+    + (monthSub==="custom"  ? dateInputs : "");
+}
+
+function setMode(m){
+  mode = m;
+  ["monthly","weekly","daily"].forEach(x =>
+    document.getElementById(`btn-${x}`).classList.toggle("active", x===m));
+  renderFilterSub();
+  loadData();
+}
+
+/* ══════════════════════════════════════════════════════════════
+   FETCH + ORCHESTRATE
+══════════════════════════════════════════════════════════════ */
+async function loadData(){
+  const {start, end} = getRange();
+  document.getElementById("period-pill").textContent = humanPeriod(start, end);
+  document.getElementById("last-updated").textContent = "Updated " + new Date().toLocaleTimeString("en-IN");
+  try{
+    const r   = await fetch(`/api/dashboard?start=${start}&end=${end}`);
+    const d   = await r.json();
+    if(d.error){ noData(d.error); return; }
+    renderKPIs(d);
+    renderServiceCards(d);
+    renderAreaChart(d);
+    renderDonut(d);
+    renderSkuAreaChart(d);
+    renderSkuTable(d);
+    renderBarChart(d);
+  }catch(e){ noData("Failed to load data"); console.error(e); }
+}
+
+function noData(msg){
+  const html = `<div class="no-data"><div class="no-data-icon">📭</div><span>${msg}</span><span style="color:var(--muted);font-size:11px">Upload billing CSVs via the Calculator</span></div>`;
+  ["area-svg","donut-legend","bar-svg","svc-grid","sku-table-wrap","sku-area-svg"].forEach(id=>{
+    const el = document.getElementById(id); if(el) el.innerHTML = html;
+  });
+  document.getElementById("kpi-grid").innerHTML =
+    kpiShell("List Cost","🧾","#00e5ff","—","") +
+    kpiShell("After Discount","✅","#00ff87","—","") +
+    kpiShell("Total Savings","💰","#ffd60a","—","");
+}
+
+/* ══════════════════════════════════════════════════════════════
+   KPI CARDS
+══════════════════════════════════════════════════════════════ */
+function kpiShell(label, icon, color, value, full, delta){
+  const deltaHtml = delta != null
+    ? `<div class="kpi-delta"><span class="${+delta>0?"delta-up":"delta-down"}">${+delta>0?"▲":"▼"} ${Math.abs(+delta).toFixed(1)}%</span><span style="color:var(--muted)">vs prev period</span></div>`
+    : "";
+  return `<div class="kpi-card" style="--kpi-color:${color}">
+    <div class="kpi-label">${label} <span>${icon}</span></div>
+    <div class="kpi-value">${value}</div>
+    <div class="kpi-full">${full}</div>
+    ${deltaHtml}
+  </div>`;
+}
+
+function renderKPIs(d){
+  const dl = d.prev_list    > 0 ? ((d.grand_list    - d.prev_list)    / d.prev_list    * 100) : null;
+  const da = d.prev_after   > 0 ? ((d.grand_after   - d.prev_after)   / d.prev_after   * 100) : null;
+  const ds = d.prev_savings > 0 ? ((d.grand_savings - d.prev_savings) / d.prev_savings * 100) : null;
+  document.getElementById("kpi-grid").innerHTML =
+    kpiShell("List Cost",      "🧾", "#00e5ff", fmtINR(d.grand_list),    fmtFull(d.grand_list),    dl) +
+    kpiShell("After Discount", "✅", "#00ff87", fmtINR(d.grand_after),   fmtFull(d.grand_after),   da) +
+    kpiShell("Total Savings",  "💰", "#ffd60a", fmtINR(d.grand_savings), fmtFull(d.grand_savings), ds);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   SERVICE CARDS
+══════════════════════════════════════════════════════════════ */
+function renderServiceCards(d){
+  const grand = d.grand_after || 1;
+  const svcMap = {};
+  (d.services||[]).forEach(s => { svcMap[s.service_name] = s; });
+  const grid = document.getElementById("svc-grid");
+  if(!(d.services||[]).length){
+    grid.innerHTML=`<div class="no-data" style="grid-column:1/-1"><div class="no-data-icon">📭</div><span>No service data</span></div>`;
+    return;
+  }
+  let html = SVC_META.map(s => {
+    const sv = svcMap[s.name] || {list_total:0, after_discount:0, savings:0};
+    const pct = (sv.after_discount / grand * 100);
+    return `<div class="svc-card" style="border:1px solid ${s.color}33">
+      <div class="svc-glow" style="background:${s.color}"></div>
+      <div class="svc-icon">${s.icon}</div>
+      <div class="svc-name">${s.name}</div>
+      <div class="svc-value">${fmtINR(sv.after_discount)}</div>
+      <div class="svc-sub">List ${fmtINR(sv.list_total)} · Saved ${fmtINR(sv.savings)}</div>
+      <div class="svc-bar-bg"><div class="svc-bar-fill" style="width:${pct.toFixed(1)}%;background:${s.color}"></div></div>
+      <div class="svc-pct"><span>Share of total</span><span style="color:${s.color};font-weight:700">${pct.toFixed(1)}%</span></div>
+    </div>`;
+  });
+  (d.services||[]).forEach(s => {
+    if(!SVC_META.find(x=>x.name===s.service_name)){
+      const pct = (s.after_discount/grand*100);
+      html.push(`<div class="svc-card" style="border:1px solid #ffffff22">
+        <div class="svc-icon">☁️</div>
+        <div class="svc-name">${s.service_name}</div>
+        <div class="svc-value">${fmtINR(s.after_discount)}</div>
+        <div class="svc-sub">List ${fmtINR(s.list_total)} · Saved ${fmtINR(s.savings)}</div>
+        <div class="svc-bar-bg"><div class="svc-bar-fill" style="width:${pct.toFixed(1)}%;background:#64748b"></div></div>
+        <div class="svc-pct"><span>Share</span><span style="color:#94a3b8;font-weight:700">${pct.toFixed(1)}%</span></div>
+      </div>`);
+    }
+  });
+  grid.innerHTML = html.join("");
+}
+
+/* ══════════════════════════════════════════════════════════════
+   SHARED LINE CHART SVG BUILDER
+   Renders one line per series with dots, gradient fill under
+   each line, hover crosshair, and unified tooltip.
+══════════════════════════════════════════════════════════════ */
+const tooltipCallbacks = {};
+
+function buildLineChart(svgId, tooltipId, dates, keys, colors, dateMap, H, labelFn){
+  const svg = document.getElementById(svgId);
+  if(!svg) return;
+  const W   = svg.parentElement.clientWidth || 700;
+  svg.setAttribute("width",  W);
+  svg.setAttribute("height", H);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const pad = {t:14, r:16, b:36, l:66};
+  const cW  = W - pad.l - pad.r;
+  const cH  = H - pad.t - pad.b;
+
+  if(!dates.length){
+    svg.innerHTML=`<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="#64748b" font-size="13">No data for this period</text>`;
+    return;
+  }
+
+  // Per-series values (NOT stacked — independent lines)
+  const series = keys.map((k,ki) => ({
+    key:    k,
+    color:  colors[ki] || "#64748b",
+    vals:   dates.map(d => +((dateMap[d]||{})[k] || 0)),
+  }));
+  const maxVal = Math.max(...series.flatMap(s=>s.vals), 1);
+  const xPos   = i => pad.l + (dates.length <= 1 ? cW/2 : i/(dates.length-1)*cW);
+  const yPos   = v => pad.t + cH - (v/maxVal)*cH;
+
+  // Grid lines + Y-axis labels
+  let grid = "";
+  for(let i=0; i<=4; i++){
+    const v = maxVal/4*i, y = yPos(v);
+    grid += `<line x1="${pad.l}" y1="${y}" x2="${W-pad.r}" y2="${y}" stroke="#1e2d3d" stroke-dasharray="3,3"/>
+      <text x="${pad.l-8}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="10" fill="#64748b" font-family="monospace">${fmtINR(v)}</text>`;
+  }
+  // X-axis labels
+  const step = Math.max(1, Math.floor(dates.length/8));
+  dates.forEach((d,i) => {
+    if(i%step!==0 && i!==dates.length-1) return;
+    grid += `<text x="${xPos(i)}" y="${H-pad.b+16}" text-anchor="middle" font-size="9" fill="#64748b" font-family="monospace">${fmtLabel(d)}</text>`;
+  });
+
+  // Gradient defs + fills + lines + dots
+  let defs="", fills="", lines="", dots="";
+  series.forEach((s,si) => {
+    const gid = `_lg_${svgId.replace(/[^a-z0-9]/gi,"")}_${si}`;
+    defs += `<linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="${s.color}" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="${s.color}" stop-opacity="0.02"/>
+    </linearGradient>`;
+    // Fill area to baseline
+    const topPts  = s.vals.map((v,i) => `${xPos(i)},${yPos(v)}`).join(" ");
+    const baseline = yPos(0);
+    fills += `<path d="M ${topPts.split(" ")[0]} L ${topPts} L ${xPos(dates.length-1)},${baseline} L ${xPos(0)},${baseline} Z" fill="url(#${gid})"/>`;
+    // Line
+    lines += `<polyline points="${topPts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    // Dots (shown only when few dates)
+    if(dates.length <= 40){
+      s.vals.forEach((v,i) => {
+        if(!v) return;
+        dots += `<circle cx="${xPos(i)}" cy="${yPos(v)}" r="3" fill="${s.color}" stroke="${s.color}" stroke-width="1.5" opacity="0.85" class="_dot_${svgId}"/>`;
+      });
+    }
+  });
+
+  // Vertical crosshair line (hidden by default)
+  const xhair = `<line id="${svgId}-xhair" x1="0" y1="${pad.t}" x2="0" y2="${pad.t+cH}" stroke="#ffffff22" stroke-width="1" stroke-dasharray="4,3" display="none"/>`;
+
+  // Invisible hover rects (one per date column)
+  const colW   = dates.length > 1 ? cW/(dates.length-1) : cW;
+  const hovers = dates.map((d,i) =>
+    `<rect x="${xPos(i)-colW/2}" y="${pad.t}" width="${colW}" height="${cH}" fill="transparent" data-i="${i}" class="_lhover_${svgId}"/>`
+  ).join("");
+
+  svg.innerHTML = `<defs>${defs}</defs>${grid}${fills}${lines}${dots}${xhair}${hovers}`;
+
+  // Tooltip + crosshair events
+  const tipEl   = document.getElementById(tooltipId);
+  const xhairEl = svg.querySelector(`#${svgId}-xhair`);
+  if(!tipEl) return;
+
+  svg.querySelectorAll(`._lhover_${svgId}`).forEach(el => {
+    el.addEventListener("mousemove", e => {
+      const i  = +el.dataset.i;
+      const d  = dates[i];
+      const cb = tooltipCallbacks[svgId];
+      const dm = dateMap;
+      tipEl.innerHTML = cb ? cb(d, i, dm) : defaultLineTip(d, keys, colors, dm, labelFn);
+      // crosshair
+      if(xhairEl){ xhairEl.setAttribute("x1", xPos(i)); xhairEl.setAttribute("x2", xPos(i)); xhairEl.removeAttribute("display"); }
+      const rect = svg.getBoundingClientRect();
+      let tx = e.clientX - rect.left + 14;
+      if(tx + 215 > W) tx -= 230;
+      tipEl.style.left    = tx+"px";
+      tipEl.style.top     = (e.clientY - rect.top - 60)+"px";
+      tipEl.style.display = "block";
+    });
+    el.addEventListener("mouseleave", () => {
+      tipEl.style.display="none";
+      if(xhairEl) xhairEl.setAttribute("display","none");
+    });
+  });
+}
+
+function defaultLineTip(date, keys, colors, dateMap, labelFn){
+  const dm   = dateMap[date] || {};
+  const total = keys.reduce((a,k)=>a+(+(dm[k]||0)),0);
+  const rows  = keys.map((k,ki)=>{
+    const v = +(dm[k]||0); if(!v) return "";
+    const lbl = labelFn ? labelFn(k,ki) : k;
+    return `<div class="tooltip-row"><span style="color:${colors[ki]}">${lbl}</span><span style="color:${colors[ki]};font-family:var(--mono);font-weight:700;white-space:nowrap">${fmtINR(v)}</span></div>`;
+  }).filter(Boolean).join("");
+  return `<div class="tooltip-label">${fmtLabel(date)}</div>${rows}
+    <div class="tooltip-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+      <span style="color:var(--text);font-weight:700">Total</span>
+      <span style="color:var(--accent);font-family:var(--mono);font-weight:700">${fmtINR(total)}</span>
+    </div>`;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   SERVICE LINE CHART
+══════════════════════════════════════════════════════════════ */
+function renderAreaChart(d){
+  const dates    = (d.daily||[]).map(r=>r.billing_date);
+  const svcNames = [...new Set((d.svc_daily||[]).map(r=>r.service_name))];
+  document.getElementById("area-svc-count").textContent = svcNames.length+" services";
+
+  const dm = {};
+  (d.svc_daily||[]).forEach(r => {
+    if(!dm[r.billing_date]) dm[r.billing_date]={};
+    dm[r.billing_date][r.service_name] = r.after_discount;
+  });
+  const colors = svcNames.map(n=>(SVC_META.find(s=>s.name===n)||{color:"#64748b"}).color);
+
+  // Build legend
+  const legEl = document.getElementById("area-legend");
+  if(legEl) legEl.innerHTML = svcNames.map((n,i)=>
+    `<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)">
+      <span style="display:inline-block;width:16px;height:2px;border-radius:1px;background:${colors[i]}"></span>${n}
+    </div>`
+  ).join("");
+
+  tooltipCallbacks["area-svg"] = (date, i, dateMap) => {
+    const entries = svcNames.map((n,ki)=>{
+      const v=+((dateMap[date]||{})[n]||0); if(!v) return "";
+      return `<div class="tooltip-row"><span style="color:${colors[ki]}">${n}</span><span style="color:${colors[ki]};font-family:var(--mono);font-weight:700">${fmtINR(v)}</span></div>`;
+    }).filter(Boolean).join("");
+    const total = svcNames.reduce((a,n)=>a+(+((dateMap[date]||{})[n]||0)),0);
+    return `<div class="tooltip-label">${fmtLabel(date)}</div>${entries}
+      <div class="tooltip-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+        <span style="color:var(--text);font-weight:700">Total</span>
+        <span style="color:var(--accent);font-family:var(--mono);font-weight:700">${fmtINR(total)}</span>
+      </div>`;
+  };
+  buildLineChart("area-svg","area-tooltip", dates, svcNames, colors, dm, 260, n=>n);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   SKU LINE CHART
+══════════════════════════════════════════════════════════════ */
+function renderSkuAreaChart(d){
+  const topSkus = d.top_skus || [];
+  if(!topSkus.length){
+    const svg = document.getElementById("sku-area-svg");
+    if(svg) svg.innerHTML=`<text x="50%" y="50%" text-anchor="middle" fill="#64748b" font-size="13">No SKU data for this period</text>`;
+    return;
+  }
+  const skuNames  = topSkus.map(s=>s.sku_desc);
+  const skuColors = skuNames.map((_,i)=>SKU_PALETTE[i%SKU_PALETTE.length]);
+  const dates     = [...new Set((d.sku_daily||[]).map(r=>r.billing_date))].sort();
+
+  const dm = {};
+  (d.sku_daily||[]).forEach(r=>{
+    if(!dm[r.billing_date]) dm[r.billing_date]={};
+    dm[r.billing_date][r.sku_desc]=r.after_discount;
+  });
+
+  // Build legend
+  const legEl = document.getElementById("sku-legend");
+  if(legEl) legEl.innerHTML = skuNames.map((n,i)=>{
+    const short = n.length>30?n.slice(0,30)+"…":n;
+    return `<div style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted)" title="${n}">
+      <span style="display:inline-block;width:16px;height:2px;border-radius:1px;background:${skuColors[i]}"></span>${short}
+    </div>`;
+  }).join("");
+
+  tooltipCallbacks["sku-area-svg"] = (date, i, dateMap) => {
+    const entries = skuNames.map((n,ki)=>{
+      const v=+((dateMap[date]||{})[n]||0); if(!v) return "";
+      const short=n.length>34?n.slice(0,34)+"…":n;
+      return `<div class="tooltip-row" style="font-size:11px"><span style="color:${skuColors[ki]};max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${n}">${short}</span><span style="color:${skuColors[ki]};font-family:var(--mono);font-weight:700;white-space:nowrap">${fmtINR(v)}</span></div>`;
+    }).filter(Boolean).join("");
+    const total = skuNames.reduce((a,n)=>a+(+((dateMap[date]||{})[n]||0)),0);
+    return `<div class="tooltip-label">${fmtLabel(date)}</div>${entries}
+      <div class="tooltip-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+        <span style="color:var(--text);font-weight:700">Total</span>
+        <span style="color:var(--accent);font-family:var(--mono);font-weight:700">${fmtINR(total)}</span>
+      </div>`;
+  };
+  buildLineChart("sku-area-svg","sku-area-tooltip", dates, skuNames, skuColors, dm, 240, (n,i)=>n.length>30?n.slice(0,30)+"…":n);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   BAR CHART  —  SVG grouped bars: List Cost (background, muted)
+                 + After Discount (foreground, accent)
+                 Tooltip shows List / After Discount / Savings
+══════════════════════════════════════════════════════════════ */
+function renderBarChart(d){
+  const daily = d.daily || [];
+  const svg   = document.getElementById("bar-svg");
+  const tip   = document.getElementById("bar-tooltip");
+  if(!svg) return;
+
+  if(!daily.length){
+    svg.innerHTML=`<text x="50%" y="100" text-anchor="middle" fill="#64748b" font-size="13">No data for this period</text>`;
+    return;
+  }
+
+  const H   = 200;
+  const W   = svg.parentElement.clientWidth || 700;
+  svg.setAttribute("width",  W);
+  svg.setAttribute("height", H);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+
+  const pad  = {t:14, r:16, b:36, l:66};
+  const cW   = W - pad.l - pad.r;
+  const cH   = H - pad.t - pad.b;
+  const n    = daily.length;
+  const gap  = Math.max(1, Math.floor(cW * 0.08 / n));
+  const barW = Math.max(2, (cW - gap*(n+1)) / n);
+
+  const maxVal = Math.max(...daily.map(r=>Math.max(r.list_total, r.after_discount)), 1);
+  const yPos   = v => pad.t + cH - (v/maxVal)*cH;
+  const barH   = v => Math.max(1, (v/maxVal)*cH);
+
+  // Gradient defs
+  const defs = `
+    <linearGradient id="_bg_list" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#ffd60a" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ffd60a" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="_bg_after" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#00e5ff" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0.35"/>
+    </linearGradient>`;
+
+  // Grid lines + Y labels
+  let grid = "";
+  for(let i=0; i<=4; i++){
+    const v = maxVal/4*i, y = yPos(v);
+    grid += `<line x1="${pad.l}" y1="${y}" x2="${W-pad.r}" y2="${y}" stroke="#1e2d3d" stroke-dasharray="3,3"/>
+      <text x="${pad.l-8}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="10" fill="#64748b" font-family="monospace">${fmtINR(v)}</text>`;
+  }
+  // X labels
+  const step = Math.max(1, Math.floor(n/10));
+  daily.forEach((r,i)=>{
+    if(i%step!==0 && i!==n-1) return;
+    const x = pad.l + gap*(i+1) + barW*i + barW/2;
+    grid += `<text x="${x}" y="${H-pad.b+16}" text-anchor="middle" font-size="9" fill="#64748b" font-family="monospace">${fmtLabel(r.billing_date)}</text>`;
+  });
+
+  // Bars
+  let bars = "";
+  daily.forEach((r,i)=>{
+    const x   = pad.l + gap*(i+1) + barW*i;
+    const lH  = barH(r.list_total);
+    const aH  = barH(r.after_discount);
+    const lY  = yPos(r.list_total);
+    const aY  = yPos(r.after_discount);
+    // List bar (background, amber, slightly wider for depth)
+    bars += `<rect x="${x}" y="${lY}" width="${barW}" height="${lH}" rx="2" fill="url(#_bg_list)" stroke="#ffd60a44" stroke-width="0.5"
+              data-d="${r.billing_date}" data-l="${r.list_total}" data-a="${r.after_discount}" data-s="${r.savings_total}" class="_bar_bg"/>`;
+    // After-discount bar (foreground, accent)
+    bars += `<rect x="${x+1}" y="${aY}" width="${barW-2}" height="${aH}" rx="2" fill="url(#_bg_after)"
+              data-d="${r.billing_date}" data-l="${r.list_total}" data-a="${r.after_discount}" data-s="${r.savings_total}" class="_bar_fg"/>`;
+  });
+
+  svg.innerHTML = `<defs>${defs}</defs>${grid}${bars}`;
+
+  // Tooltip on both bar types
+  const tipHandler = (el, e) => {
+    tip.innerHTML = `<div class="tooltip-label">${fmtLabel(el.dataset.d)}</div>
+      <div class="tooltip-row"><span style="color:#ffd60a">List Cost</span><span style="color:#ffd60a;font-family:var(--mono);font-weight:700">${fmtINR(el.dataset.l)}</span></div>
+      <div class="tooltip-row"><span style="color:var(--accent)">After Discount</span><span style="color:var(--accent);font-family:var(--mono);font-weight:700">${fmtINR(el.dataset.a)}</span></div>
+      <div class="tooltip-row"><span style="color:var(--green)">Savings</span><span style="color:var(--green);font-family:var(--mono);font-weight:700">${fmtINR(el.dataset.s)}</span></div>`;
+    const rect = svg.getBoundingClientRect();
+    let tx = e.clientX - rect.left + 10;
+    if(tx+215 > W) tx -= 225;
+    tip.style.left=tx+"px"; tip.style.top=(e.clientY-rect.top-70)+"px"; tip.style.display="block";
+  };
+  svg.querySelectorAll("._bar_bg, ._bar_fg").forEach(el=>{
+    el.style.cursor="pointer";
+    el.addEventListener("mouseenter", e=>tipHandler(el,e));
+    el.addEventListener("mousemove",  e=>tipHandler(el,e));
+    el.addEventListener("mouseleave", ()=>{ tip.style.display="none"; });
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════
+   BOOT — default to last date with data in DB
+══════════════════════════════════════════════════════════════ */
+(async()=>{
+  try{
+    const r = await fetch("/api/dashboard/latest-date");
+    const j = await r.json();
+    if(j.latest_date){
+      latestDate  = j.latest_date;
+      customStart = latestDate;
+      customEnd   = latestDate;
+    }
+  }catch(e){ /* fallback: use today */ }
+
+  // Activate daily button (default view = last uploaded day)
+  mode = "daily";
+  ["monthly","weekly","daily"].forEach(x =>
+    document.getElementById(`btn-${x}`).classList.toggle("active", x==="daily"));
+
+  renderFilterSub();
+  loadData();
+})();
+
+// Refresh every 5 minutes
+setInterval(loadData, 5 * 60 * 1000);
+</script>
+{% endblock %}

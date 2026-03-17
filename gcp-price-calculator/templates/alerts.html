@@ -1,0 +1,718 @@
+{% extends "base.html" %}
+{% block title %}Email Alerts — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}Email Alerts{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div>
+    <h1>Email Alerts</h1>
+    <p>Configure daily billing summary emails with day-over-day comparison</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn btn-secondary" onclick="previewEmail()" id="preview-btn">👁 Preview Email</button>
+    <button class="btn btn-secondary" onclick="validateConfig()" id="validate-btn">🔍 Validate SMTP</button>
+    <button class="btn btn-primary"   onclick="sendTest()"      id="test-btn">📧 Send Test Now</button>
+  </div>
+</div>
+
+<div class="grid-2" style="gap:24px;align-items:start">
+
+  <!-- LEFT: Config form -->
+  <div>
+
+    <!-- Validation result panel (hidden by default) -->
+    <div id="validation-panel" style="display:none;margin-bottom:20px">
+      <div class="card" id="validation-card" style="border-color:var(--border)">
+        <div class="card-header">
+          <span class="card-title" id="val-title">🔍 Validation Results</span>
+          <button onclick="document.getElementById('validation-panel').style.display='none'"
+                  style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1">×</button>
+        </div>
+        <div id="val-steps" style="margin-top:12px;display:flex;flex-direction:column;gap:8px"></div>
+        <div id="val-summary" style="margin-top:14px;padding:12px 16px;border-radius:10px;font-size:13px;font-weight:600;display:none"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header">
+        <span class="card-title">⚙️ SMTP Configuration</span>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0" onclick="toggleEnabled()">
+          <div class="toggle-track {% if cfg.enabled %}on{% endif %}" id="toggle-track">
+            <div class="toggle-thumb"></div>
+          </div>
+          <span style="font-size:13px;color:var(--text)" id="toggle-label">
+            {% if cfg.enabled %}Alerts Enabled{% else %}Alerts Disabled{% endif %}
+          </span>
+        </label>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:14px;margin-top:8px">
+
+        <div class="grid-2" style="gap:12px">
+          <div>
+            <div class="input-group" style="margin-bottom:4px">
+              <label>SMTP Host</label>
+              <input type="text" id="smtp_host" placeholder="smtp.gmail.com"
+                     value="{{ cfg.smtp_host or '' }}" oninput="clearFieldError('smtp_host')"/>
+            </div>
+            <div class="field-error" id="err-smtp_host"></div>
+          </div>
+          <div>
+            <div class="input-group" style="margin-bottom:4px">
+              <label>SMTP Port</label>
+              <input type="number" id="smtp_port" placeholder="587" min="1" max="65535"
+                     value="{{ cfg.smtp_port or 587 }}" oninput="clearFieldError('smtp_port')"/>
+            </div>
+            <div class="field-error" id="err-smtp_port"></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="input-group" style="margin-bottom:4px">
+            <label>SMTP Username</label>
+            <input type="text" id="smtp_user" placeholder="your@gmail.com"
+                   value="{{ cfg.smtp_user or '' }}" oninput="clearFieldError('smtp_user')"/>
+          </div>
+          <div class="field-error" id="err-smtp_user"></div>
+        </div>
+
+        <div>
+          <div class="input-group" style="margin-bottom:4px">
+            <label>SMTP Password / App Password</label>
+            <div style="position:relative">
+              <input type="password" id="smtp_password"
+                     placeholder="{% if cfg.smtp_password %}●●●●●●●● (saved — leave blank to keep){% else %}Enter password{% endif %}"
+                     style="padding-right:44px" oninput="clearFieldError('smtp_password')"/>
+              <button onclick="togglePwd()" type="button"
+                      style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px"
+                      id="pwd-eye">👁</button>
+            </div>
+          </div>
+          {% if cfg.smtp_password %}
+          <div style="font-size:11px;color:var(--green);margin-top:2px">✓ Password saved in database</div>
+          {% endif %}
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">
+            For Gmail use an <a href="https://support.google.com/accounts/answer/185833" target="_blank" style="color:var(--accent)">App Password</a>
+          </div>
+        </div>
+
+        <div>
+          <div class="input-group" style="margin-bottom:4px">
+            <label>From Address</label>
+            <input type="email" id="from_address" placeholder="GCP Alerts &lt;alerts@company.com&gt;"
+                   value="{{ cfg.from_address or '' }}" oninput="clearFieldError('from_address')"/>
+          </div>
+          <div class="field-error" id="err-from_address"></div>
+        </div>
+
+        <div class="input-group">
+          <label>TLS</label>
+          <select id="smtp_use_tls">
+            <option value="true"  {% if cfg.smtp_use_tls != False %}selected{% endif %}>Use STARTTLS (recommended — port 587)</option>
+            <option value="false" {% if cfg.smtp_use_tls == False %}selected{% endif %}>No TLS (port 25 / 465 SSL)</option>
+          </select>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><span class="card-title">📨 Recipients & Schedule</span></div>
+      <div style="display:flex;flex-direction:column;gap:14px;margin-top:8px">
+
+        <div>
+          <div class="input-group" style="margin-bottom:4px">
+            <label>Recipients (comma-separated)</label>
+            <textarea id="recipients" rows="3"
+                      style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px 14px;font-size:14px;font-family:var(--sans);outline:none;resize:vertical;transition:border-color 0.2s;width:100%;box-sizing:border-box"
+                      onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"
+                      oninput="clearFieldError('recipients')"
+                      placeholder="alice@company.com, bob@company.com">{{ cfg.recipients or '' }}</textarea>
+          </div>
+          <div class="field-error" id="err-recipients"></div>
+          <div id="recipients-preview" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
+        </div>
+
+        <!-- ── Send Mode ── -->
+        <div>
+          <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:10px">Send Mode</label>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px" id="mode-grid">
+            {% set cur_mode = cfg.send_mode if cfg.send_mode else 'manual' %}
+            <button type="button" class="mode-btn {% if cur_mode == 'manual' %}mode-active{% endif %}" data-mode="manual" onclick="setMode('manual')">
+              <div class="mode-icon">🖐</div>
+              <div class="mode-label">Manual</div>
+              <div class="mode-sub">Send on demand only</div>
+            </button>
+            <button type="button" class="mode-btn {% if cur_mode == 'daily' %}mode-active{% endif %}" data-mode="daily" onclick="setMode('daily')">
+              <div class="mode-icon">📅</div>
+              <div class="mode-label">Daily</div>
+              <div class="mode-sub">Every day at set time</div>
+            </button>
+            <button type="button" class="mode-btn {% if cur_mode == 'weekly' %}mode-active{% endif %}" data-mode="weekly" onclick="setMode('weekly')">
+              <div class="mode-icon">📆</div>
+              <div class="mode-label">Weekly</div>
+              <div class="mode-sub">Pick days of week</div>
+            </button>
+            <button type="button" class="mode-btn {% if cur_mode == 'monthly' %}mode-active{% endif %}" data-mode="monthly" onclick="setMode('monthly')">
+              <div class="mode-icon">🗓</div>
+              <div class="mode-label">Monthly</div>
+              <div class="mode-sub">1st of each month</div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Weekly day picker (shown only in weekly mode) -->
+        <div id="weekly-days-row" style="display:none">
+          <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Days of Week</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            {% set saved_days = (cfg.schedule_days or '').split(',') %}
+            {% for day_num, day_name in [('0','Mon'),('1','Tue'),('2','Wed'),('3','Thu'),('4','Fri'),('5','Sat'),('6','Sun')] %}
+            <button type="button"
+              class="day-btn {% if day_num in saved_days %}day-active{% endif %}"
+              data-day="{{ day_num }}"
+              onclick="toggleDay('{{ day_num }}')">{{ day_name }}</button>
+            {% endfor %}
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:6px" id="weekly-summary"></div>
+        </div>
+
+        <!-- Time picker (hidden when manual) -->
+        <div id="time-row" style="{% if cur_mode == 'manual' %}display:none{% endif %}">
+          <div class="input-group" style="margin-bottom:4px">
+            <label>Send Time (UTC)</label>
+            <input type="time" id="schedule_time" value="{{ cfg.schedule_time or '08:00' }}"
+                   style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px 14px;font-size:14px;font-family:var(--sans);outline:none;width:100%;transition:border-color 0.2s"
+                   onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"/>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px" id="schedule-hint">
+            Compares current vs previous billing run and emails at this UTC time
+          </div>
+        </div>
+
+      </div>
+
+      <div style="margin-top:20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-secondary" onclick="validateConfig()" id="save-validate-btn">🔍 Validate First</button>
+        <button class="btn btn-primary"   onclick="saveConfig()"     id="save-btn">💾 Save Configuration</button>
+        <span id="save-status" style="font-size:13px;display:none"></span>
+      </div>
+
+      <!-- DB persistence note -->
+      {% if cfg.updated_at %}
+      <div style="margin-top:14px;padding:10px 14px;background:rgba(0,229,255,0.05);border:1px solid rgba(0,229,255,0.15);border-radius:8px;font-size:12px;color:var(--muted)">
+        ✓ Last saved to PostgreSQL by <strong style="color:var(--text)">{{ cfg.updated_by or '—' }}</strong>
+        on {{ cfg.updated_at.strftime('%d %b %Y at %H:%M') }} UTC
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- How it works -->
+    <div class="card" style="background:rgba(0,229,255,0.03);border-color:rgba(0,229,255,0.15)">
+      <div class="card-header"><span class="card-title">ℹ️ How It Works</span></div>
+      <div style="font-size:13px;color:var(--muted);line-height:1.8;margin-top:8px">
+        <ol style="padding-left:18px;display:flex;flex-direction:column;gap:6px">
+          <li>Fill in SMTP details → click <strong style="color:var(--text)">Validate SMTP</strong> to test connection</li>
+          <li>If validation passes → click <strong style="color:var(--text)">Save Configuration</strong> (persisted in PostgreSQL)</li>
+          <li>Choose a <strong style="color:var(--accent)">Send Mode</strong>:
+            <span style="color:var(--yellow)">Manual</span> (on-demand only),
+            <span style="color:var(--yellow)">Daily</span> (every day at set time),
+            <span style="color:var(--yellow)">Weekly</span> (chosen weekdays),
+            <span style="color:var(--yellow)">Monthly</span> (1st of month)</li>
+          <li>The scheduler compares <strong style="color:var(--accent)">After-Discount totals</strong> across the last 2 billing runs</li>
+          <li>Sends email: <em style="color:var(--yellow)">Previous ₹9,000 → Current ₹9,100 = ▲ ₹100 increased</em></li>
+          <li>Use <strong style="color:var(--text)">Send Test Now</strong> to trigger a one-off send regardless of schedule</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Preview & Logs -->
+  <div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header">
+        <span class="card-title">📬 Email Preview</span>
+        <button class="btn btn-secondary btn-sm" onclick="previewEmail()">Refresh</button>
+      </div>
+      <div style="margin-top:12px;border:1px solid var(--border);border-radius:10px;overflow:hidden;height:460px">
+        <iframe id="preview-frame" style="width:100%;height:100%;border:none;background:#fff"
+                src="/alerts/preview"></iframe>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📋 Send Log</span>
+        <span class="pill pill-blue">Last {{ logs|length }}</span>
+      </div>
+      {% if logs %}
+      <div class="table-wrap" style="border:none;margin-top:12px;max-height:360px;overflow-y:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Sent At</th>
+              <th>Status</th>
+              <th>Run #</th>
+              <th style="text-align:right">After Disc.</th>
+              <th style="text-align:right">Delta</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for l in logs %}
+            <tr>
+              <td>
+                <div class="mono" style="font-size:11px">{{ l.sent_at.strftime('%d %b %Y') }}</div>
+                <div style="font-size:10px;color:var(--muted)">{{ l.sent_at.strftime('%H:%M') }} UTC</div>
+              </td>
+              <td>
+                {% if l.status == 'sent' %}
+                  <span class="pill pill-green">✓ sent</span>
+                {% else %}
+                  <span class="pill" style="background:rgba(255,77,109,0.1);color:var(--red);border:1px solid rgba(255,77,109,0.3)">✗ failed</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if l.run_id %}
+                  <a href="/history/{{ l.run_id }}" style="color:var(--accent);font-family:var(--mono);font-size:12px">#{{ l.run_id }}</a>
+                {% else %}—{% endif %}
+              </td>
+              <td class="mono" style="text-align:right;font-size:12px">
+                {% if l.total_after_discount %}₹{{ '{:,.2f}'.format(l.total_after_discount) }}{% else %}—{% endif %}
+              </td>
+              <td style="text-align:right;font-size:12px;font-weight:600">
+                {% if l.delta is not none and l.delta != 0 %}
+                  {% if l.delta > 0 %}
+                    <span style="color:#fbbf24">▲ ₹{{ '{:,.2f}'.format(l.delta) }}</span>
+                  {% else %}
+                    <span style="color:#34d399">▼ ₹{{ '{:,.2f}'.format(l.delta|abs) }}</span>
+                  {% endif %}
+                {% elif l.delta == 0 %}
+                  <span style="color:var(--muted)">→ 0</span>
+                {% else %}—{% endif %}
+              </td>
+              <td style="font-size:11px;color:var(--red);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                  title="{{ l.error_msg or '' }}">{{ l.error_msg or '' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div style="text-align:center;padding:32px;color:var(--muted);font-size:14px">
+        No emails sent yet. Validate config then click "Send Test Now".
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<style>
+.toggle-track {
+  width:44px;height:24px;background:var(--surface2);border:1px solid var(--border);
+  border-radius:12px;position:relative;transition:background 0.25s,border-color 0.25s;
+  cursor:pointer;flex-shrink:0;
+}
+.toggle-track.on { background:rgba(0,229,255,0.2);border-color:var(--accent); }
+.toggle-thumb {
+  width:18px;height:18px;background:var(--muted);border-radius:50%;
+  position:absolute;top:2px;left:3px;transition:transform 0.25s,background 0.25s;
+  pointer-events:none;
+}
+.toggle-track.on .toggle-thumb { transform:translateX(20px);background:var(--accent); }
+
+.field-error {
+  font-size:11px;color:var(--red);min-height:16px;margin-top:2px;
+  display:flex;align-items:center;gap:4px;
+}
+.field-error:not(:empty)::before { content:'⚠ '; }
+
+input.invalid, textarea.invalid {
+  border-color:var(--red) !important;
+  box-shadow:0 0 0 3px rgba(255,77,109,0.1);
+}
+input.valid { border-color:var(--green) !important; }
+
+.val-step {
+  display:flex;align-items:flex-start;gap:10px;padding:10px 14px;
+  border-radius:8px;font-size:13px;
+}
+.val-step.ok  { background:rgba(0,255,135,0.06);border:1px solid rgba(0,255,135,0.2); }
+.val-step.err { background:rgba(255,77,109,0.07);border:1px solid rgba(255,77,109,0.25); }
+.val-step.pending { background:rgba(0,229,255,0.05);border:1px solid rgba(0,229,255,0.15); }
+.val-icon { font-size:15px;flex-shrink:0;margin-top:1px; }
+.val-label { font-weight:600;color:var(--text); }
+.val-detail { color:var(--muted);font-size:12px;margin-top:2px; }
+
+.spinner {
+  display:inline-block;width:14px;height:14px;border:2px solid rgba(0,229,255,0.3);
+  border-top-color:var(--accent);border-radius:50%;
+  animation:spin 0.7s linear infinite;flex-shrink:0;margin-top:2px;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* Send mode buttons */
+.mode-btn {
+  display:flex;flex-direction:column;align-items:center;gap:4px;padding:14px 10px;
+  background:var(--surface2);border:1px solid var(--border);border-radius:10px;cursor:pointer;
+  transition:all 0.2s;text-align:center;color:var(--muted);font-family:var(--sans);
+}
+.mode-btn:hover { border-color:rgba(0,229,255,0.4);color:var(--text); }
+.mode-btn.mode-active {
+  background:rgba(0,229,255,0.08);border-color:var(--accent);color:var(--accent);
+}
+.mode-icon { font-size:20px;line-height:1; }
+.mode-label { font-size:13px;font-weight:600;color:inherit; }
+.mode-sub { font-size:10px;color:var(--muted);line-height:1.3; }
+.mode-btn.mode-active .mode-sub { color:rgba(0,229,255,0.6); }
+
+/* Day-of-week buttons */
+.day-btn {
+  width:44px;height:38px;background:var(--surface2);border:1px solid var(--border);
+  border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);
+  font-family:var(--mono);transition:all 0.2s;
+}
+.day-btn:hover { border-color:rgba(0,229,255,0.4);color:var(--text); }
+.day-btn.day-active {
+  background:rgba(0,229,255,0.12);border-color:var(--accent);color:var(--accent);
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let alertEnabled = {{ 'true' if cfg.enabled else 'false' }};
+
+/* ── Toggle ──────────────────────────────────────────────────────────── */
+function toggleEnabled() {
+  alertEnabled = !alertEnabled;
+  document.getElementById('toggle-track').classList.toggle('on', alertEnabled);
+  document.getElementById('toggle-label').textContent = alertEnabled ? 'Alerts Enabled' : 'Alerts Disabled';
+}
+
+function togglePwd() {
+  const inp = document.getElementById('smtp_password');
+  const eye = document.getElementById('pwd-eye');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  eye.textContent = inp.type === 'password' ? '👁' : '🙈';
+}
+
+/* ── Send mode ───────────────────────────────────────────────── */
+let currentMode = '{{ cfg.send_mode if cfg.send_mode else "manual" }}';
+
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.classList.toggle('mode-active', b.dataset.mode === mode);
+  });
+  const timeRow    = document.getElementById('time-row');
+  const weeklyRow  = document.getElementById('weekly-days-row');
+  const hint       = document.getElementById('schedule-hint');
+  timeRow.style.display   = mode === 'manual' ? 'none' : '';
+  weeklyRow.style.display = mode === 'weekly'  ? '' : 'none';
+  const hints = {
+    daily:   'Compares current vs previous billing run and emails daily at this UTC time',
+    weekly:  'Emails on selected weekdays at this UTC time',
+    monthly: 'Emails on the 1st of each month at this UTC time',
+  };
+  if (hint) hint.textContent = hints[mode] || '';
+}
+
+function toggleDay(day) {
+  const btn = document.querySelector(`.day-btn[data-day="${day}"]`);
+  if (btn) {
+    btn.classList.toggle('day-active');
+    updateWeeklySummary();
+  }
+}
+
+function updateWeeklySummary() {
+  const names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const active = [...document.querySelectorAll('.day-btn.day-active')].map(b => names[parseInt(b.dataset.day)]);
+  const el = document.getElementById('weekly-summary');
+  if (el) el.textContent = active.length ? 'Selected: ' + active.join(', ') : 'No days selected — pick at least one';
+}
+
+// init on load
+setMode(currentMode);
+updateWeeklySummary();
+
+/* ── Collect form data ───────────────────────────────────────────────── */
+function getFormData() {
+  return {
+    enabled:       alertEnabled,
+    smtp_host:     document.getElementById('smtp_host').value.trim(),
+    smtp_port:     parseInt(document.getElementById('smtp_port').value) || 587,
+    smtp_user:     document.getElementById('smtp_user').value.trim(),
+    smtp_password: document.getElementById('smtp_password').value,
+    smtp_use_tls:  document.getElementById('smtp_use_tls').value === 'true',
+    from_address:  document.getElementById('from_address').value.trim(),
+    recipients:    document.getElementById('recipients').value.trim(),
+    schedule_time: document.getElementById('schedule_time').value || '08:00',
+    send_mode:     currentMode,
+    schedule_days: [...document.querySelectorAll('.day-btn.day-active')].map(b => b.dataset.day).join(','),
+  };
+}
+
+/* ── Client-side field validation ────────────────────────────────────── */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function setFieldError(fieldId, msg) {
+  const el = document.getElementById(fieldId);
+  const er = document.getElementById('err-' + fieldId);
+  if (el)  el.classList.add('invalid');
+  if (er)  er.textContent = msg;
+}
+function clearFieldError(fieldId) {
+  const el = document.getElementById(fieldId);
+  const er = document.getElementById('err-' + fieldId);
+  if (el) { el.classList.remove('invalid'); el.classList.remove('valid'); }
+  if (er)  er.textContent = '';
+}
+function markFieldValid(fieldId) {
+  const el = document.getElementById(fieldId);
+  const er = document.getElementById('err-' + fieldId);
+  if (el) { el.classList.remove('invalid'); el.classList.add('valid'); }
+  if (er)  er.textContent = '';
+}
+
+function validateFields(data) {
+  let ok = true;
+  ['smtp_host','smtp_user','from_address','recipients'].forEach(clearFieldError);
+
+  if (!data.smtp_host)     { setFieldError('smtp_host', 'Required'); ok = false; }
+  if (!data.smtp_user)     { setFieldError('smtp_user', 'Required'); ok = false; }
+  if (!data.from_address)  { setFieldError('from_address', 'Required'); ok = false; }
+  else if (!EMAIL_RE.test(data.from_address.replace(/.*<(.+)>/, '$1')))
+                           { setFieldError('from_address', 'Invalid email format'); ok = false; }
+  if (!data.recipients)    { setFieldError('recipients', 'At least one recipient required'); ok = false; }
+  else {
+    const bad = data.recipients.split(',').map(r=>r.trim()).filter(r=>r && !EMAIL_RE.test(r));
+    if (bad.length)        { setFieldError('recipients', `Invalid: ${bad.join(', ')}`); ok = false; }
+  }
+  if (data.smtp_port < 1 || data.smtp_port > 65535)
+                           { setFieldError('smtp_port', 'Must be 1–65535'); ok = false; }
+  return ok;
+}
+
+/* live recipients preview */
+document.getElementById('recipients').addEventListener('input', function() {
+  const addrs = this.value.split(',').map(r=>r.trim()).filter(Boolean);
+  const prev  = document.getElementById('recipients-preview');
+  prev.textContent = addrs.length ? `${addrs.length} recipient(s): ${addrs.join(' · ')}` : '';
+});
+
+/* ── Validation panel helpers ────────────────────────────────────────── */
+function showValidationPanel() {
+  document.getElementById('validation-panel').style.display = 'block';
+  document.getElementById('validation-panel').scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function renderSteps(steps, pending=false) {
+  const container = document.getElementById('val-steps');
+  container.innerHTML = steps.map(s => `
+    <div class="val-step ${s.ok ? 'ok' : 'err'}">
+      <div class="val-icon">${s.ok ? '✅' : '❌'}</div>
+      <div>
+        <div class="val-label">${s.label}</div>
+        ${s.detail ? `<div class="val-detail">${s.detail}</div>` : ''}
+      </div>
+    </div>`).join('');
+  if (pending) {
+    container.innerHTML += `
+      <div class="val-step pending">
+        <div class="spinner"></div>
+        <div><div class="val-label" style="color:var(--accent)">Testing connection…</div></div>
+      </div>`;
+  }
+}
+
+function renderSummary(ok, message) {
+  const el = document.getElementById('val-summary');
+  el.style.display = 'block';
+  if (ok) {
+    el.style.background = 'rgba(0,255,135,0.08)';
+    el.style.border     = '1px solid rgba(0,255,135,0.3)';
+    el.style.color      = 'var(--green)';
+    el.innerHTML = `✅ ${message}`;
+    document.getElementById('validation-card').style.borderColor = 'rgba(0,255,135,0.4)';
+  } else {
+    el.style.background = 'rgba(255,77,109,0.08)';
+    el.style.border     = '1px solid rgba(255,77,109,0.3)';
+    el.style.color      = 'var(--red)';
+    el.innerHTML = `❌ ${message}`;
+    document.getElementById('validation-card').style.borderColor = 'rgba(255,77,109,0.4)';
+  }
+}
+
+/* ── Validate SMTP ───────────────────────────────────────────────────── */
+async function validateConfig() {
+  const data = getFormData();
+  if (!validateFields(data)) {
+    toast('Fix field errors before validating', 'error'); return;
+  }
+
+  const btn = document.getElementById('validate-btn');
+  const sb  = document.getElementById('save-validate-btn');
+  btn.disabled = true; btn.textContent = '⏳ Validating…';
+  sb.disabled  = true;
+
+  showValidationPanel();
+  document.getElementById('val-title').textContent = '🔍 Validating SMTP…';
+  document.getElementById('val-steps').innerHTML = `
+    <div class="val-step pending">
+      <div class="spinner"></div>
+      <div><div class="val-label" style="color:var(--accent)">Connecting to ${data.smtp_host}:${data.smtp_port}…</div></div>
+    </div>`;
+  document.getElementById('val-summary').style.display = 'none';
+  document.getElementById('validation-card').style.borderColor = 'rgba(0,229,255,0.3)';
+
+  try {
+    const res  = await fetch('/alerts/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+    });
+    const init = await res.json();
+    const jobId = init.job_id;
+
+    // poll
+    const started = Date.now();
+    const poll = setInterval(async () => {
+      try {
+        const sr  = await fetch('/alerts/test/status/' + jobId);
+        const job = await sr.json();
+
+        if (job.status === 'pending') {
+          renderSteps(job.steps || [], true);
+          return;
+        }
+
+        clearInterval(poll);
+        renderSteps(job.steps || []);
+        const ok = job.status === 'done';
+        renderSummary(ok, job.message || (ok ? 'All checks passed' : 'Validation failed'));
+        document.getElementById('val-title').textContent = ok ? '✅ Validation Passed' : '❌ Validation Failed';
+
+        if (ok) {
+          ['smtp_host','smtp_user','from_address','recipients'].forEach(markFieldValid);
+          toast('SMTP configuration is valid!', 'success');
+        } else {
+          toast('Validation failed — see details above', 'error');
+        }
+
+      } catch(e) {
+        clearInterval(poll);
+        renderSummary(false, 'Poll error: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = '🔍 Validate SMTP';
+        sb.disabled  = false;
+      }
+
+      if (Date.now() - started > 45000) {
+        clearInterval(poll);
+        renderSummary(false, 'Timed out after 45s');
+        btn.disabled = false; btn.textContent = '🔍 Validate SMTP';
+        sb.disabled  = false;
+      }
+    }, 1200);
+
+  } catch(e) {
+    renderSummary(false, e.message);
+    btn.disabled = false; btn.textContent = '🔍 Validate SMTP';
+    sb.disabled  = false;
+  }
+}
+
+/* ── Save config ─────────────────────────────────────────────────────── */
+async function saveConfig() {
+  const data = getFormData();
+  if (!validateFields(data)) {
+    toast('Fix field errors before saving', 'error'); return;
+  }
+
+  const btn    = document.getElementById('save-btn');
+  const status = document.getElementById('save-status');
+  btn.disabled = true; btn.textContent = '⏳ Saving…';
+  status.style.display = 'none';
+
+  try {
+    const res  = await fetch('/alerts/save', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+    });
+    const d = await res.json();
+    if (d.ok) {
+      status.style.display = 'inline';
+      status.style.color   = 'var(--green)';
+      status.textContent   = '✓ Saved to PostgreSQL';
+      toast('Configuration saved to database!', 'success');
+      setTimeout(() => location.reload(), 1200);
+    } else {
+      status.style.display = 'inline';
+      status.style.color   = 'var(--red)';
+      status.textContent   = '✗ ' + (d.error || 'Save failed');
+      toast('Save failed: ' + (d.error || ''), 'error');
+    }
+  } catch(e) {
+    status.style.display = 'inline';
+    status.style.color   = 'var(--red)';
+    status.textContent   = '✗ ' + e.message;
+    toast('Save error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '💾 Save Configuration';
+    setTimeout(() => status.style.display = 'none', 5000);
+  }
+}
+
+/* ── Send test ───────────────────────────────────────────────────────── */
+async function sendTest() {
+  const btn = document.getElementById('test-btn');
+  btn.disabled = true; btn.textContent = '⏳ Sending…';
+
+  try {
+    const res  = await fetch('/alerts/test', { method: 'POST' });
+    const data = await res.json();
+
+    if (!data.ok && !data.job_id) {
+      toast('✗ ' + (data.message || 'Failed to start send'), 'error');
+      btn.disabled = false; btn.textContent = '📧 Send Test Now';
+      return;
+    }
+
+    const jobId   = data.job_id;
+    const started = Date.now();
+    const poll    = setInterval(async () => {
+      try {
+        const sr   = await fetch('/alerts/test/status/' + jobId);
+        const stat = await sr.json();
+
+        if (stat.status === 'done') {
+          clearInterval(poll);
+          toast('✓ Test email sent! Check your inbox.', 'success');
+          btn.disabled = false; btn.textContent = '📧 Send Test Now';
+          setTimeout(() => location.reload(), 1500);
+        } else if (stat.status === 'error') {
+          clearInterval(poll);
+          toast('✗ ' + (stat.message || 'Send failed'), 'error');
+          btn.disabled = false; btn.textContent = '📧 Send Test Now';
+        } else if (Date.now() - started > 60000) {
+          clearInterval(poll);
+          toast('⏱ Timed out — check send log', 'info');
+          btn.disabled = false; btn.textContent = '📧 Send Test Now';
+        }
+      } catch(e) {
+        clearInterval(poll);
+        toast('✗ ' + e.message, 'error');
+        btn.disabled = false; btn.textContent = '📧 Send Test Now';
+      }
+    }, 1500);
+
+  } catch(e) {
+    toast('✗ ' + e.message, 'error');
+    btn.disabled = false; btn.textContent = '📧 Send Test Now';
+  }
+}
+
+/* ── Preview ─────────────────────────────────────────────────────────── */
+function previewEmail() {
+  document.getElementById('preview-frame').src = '/alerts/preview?t=' + Date.now();
+}
+</script>
+{% endblock %}

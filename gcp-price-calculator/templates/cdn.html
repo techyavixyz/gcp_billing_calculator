@@ -1,0 +1,597 @@
+{% extends "base.html" %}
+{% block title %}CDN Calculator — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}CDN Calculator{% endblock %}
+
+{% block content %}
+<style>
+.cdn-section { margin-bottom: 28px; }
+.tbl-label {
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 14px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.tbl-sublabel {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  margin-top: 3px; margin-bottom: 16px;
+}
+.kw-tag {
+  display: inline-block; font-family: var(--mono); font-size: 10px;
+  padding: 2px 8px; border-radius: 4px; margin: 2px 3px 2px 0;
+  background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+}
+.dl-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 7px; font-size: 12px;
+  font-family: var(--mono); cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text); transition: all 0.2s; text-decoration:none;
+}
+.dl-btn:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div>
+    <h1>CDN Cost Calculator</h1>
+    <p>Aggregate CDN spend from billing history — data transfer, cache lookups, and fill breakdown</p>
+  </div>
+  <div id="download-bar" style="display:none;gap:8px;flex-wrap:wrap;align-items:center">
+    <span style="font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-right:4px">Export</span>
+    <button class="dl-btn" onclick="exportPng()">PNG</button>
+    <button class="dl-btn" onclick="exportJpg()">JPG</button>
+    <button class="dl-btn" onclick="exportPdf()">PDF</button>
+    <button class="dl-btn" onclick="exportXlsx()">XLSX</button>
+  </div>
+</div>
+
+<!-- FILTER BAR -->
+<div class="card cdn-section" style="border:1px solid rgba(0,229,255,0.15)">
+  <div class="card-header">
+    <span class="card-title">Filter</span>
+    <span id="loading-badge" style="display:none;font-family:var(--mono);font-size:11px;color:var(--accent)">Loading...</span>
+  </div>
+
+  <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
+    <!-- Mode toggle -->
+    <div>
+      <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Filter Mode</label>
+      <div style="display:flex;background:var(--surface2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <button id="mode-date-btn"  onclick="setMode('date')"
+          style="padding:8px 16px;font-size:11px;font-family:var(--mono);border:none;cursor:pointer;background:#1a56db;color:#fff">
+          Single Date
+        </button>
+        <button id="mode-month-btn" onclick="setMode('month')"
+          style="padding:8px 16px;font-size:11px;font-family:var(--mono);border:none;cursor:pointer;background:transparent;color:var(--muted)">
+          Month
+        </button>
+        <button id="mode-range-btn" onclick="setMode('range')"
+          style="padding:8px 16px;font-size:11px;font-family:var(--mono);border:none;cursor:pointer;background:transparent;color:var(--muted)">
+          Custom Range
+        </button>
+      </div>
+    </div>
+
+    <!-- Single date -->
+    <div id="ctrl-date">
+      <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Date</label>
+      <select id="sel-date" style="min-width:160px;padding:9px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none">
+        <option value="">Select date</option>
+      </select>
+    </div>
+
+    <!-- Month -->
+    <div id="ctrl-month" style="display:none">
+      <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Month</label>
+      <select id="sel-month" style="min-width:160px;padding:9px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none">
+        <option value="">Select month</option>
+      </select>
+    </div>
+
+    <!-- Custom range -->
+    <div id="ctrl-range" style="display:none;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div>
+        <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Start</label>
+        <input type="date" id="range-start"
+          style="padding:9px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:13px;outline:none"
+          onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"/>
+      </div>
+      <div>
+        <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">End</label>
+        <input type="date" id="range-end"
+          style="padding:9px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:13px;outline:none"
+          onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"/>
+      </div>
+    </div>
+
+    <!-- Quick chips -->
+    <div>
+      <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Quick Range</label>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="quickRange(7)">7d</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickRange(30)">30d</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickRange(90)">90d</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickRange(365)">1yr</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickRange(9999)">All</button>
+      </div>
+    </div>
+
+    <div>
+      <label style="display:block;font-family:var(--mono);font-size:10px;color:transparent;margin-bottom:6px">.</label>
+      <button class="btn btn-primary" onclick="loadCdn()" id="load-btn">Calculate</button>
+    </div>
+  </div>
+
+  <div id="active-range" style="display:none;margin-top:12px;font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--surface2);padding:8px 14px;border-radius:6px;border:1px solid var(--border)"></div>
+
+  <!-- SKU bucket reference — driven by admin config -->
+  <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase">SKU Classification Buckets</div>
+      {% if current_user.role == 'admin' %}
+      <a href="/cdn-setup" style="font-family:var(--mono);font-size:10px;color:var(--accent);text-decoration:none;border:1px solid rgba(0,229,255,0.25);border-radius:5px;padding:3px 10px">Edit Formulas</a>
+      {% endif %}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:16px">
+      {% set role_colors = {'hit':'var(--accent)', 'miss':'#f87171', 'lookup':'#a78bfa'} %}
+      {% set role_labels = {'hit':'Cache Hit (Total Hit GB)', 'miss':'Cache Miss (Total Miss GB)', 'lookup':'Cache Lookup'} %}
+      {% for b in buckets if b.is_active %}
+      <div style="min-width:220px">
+        <div style="font-family:var(--mono);font-size:11px;color:{{ role_colors.get(b.bucket_role, 'var(--muted)') }};margin-bottom:5px;font-weight:700">{{ b.bucket_name }}</div>
+        {% for pat in b.sku_patterns.splitlines() if pat.strip() %}
+        <span class="kw-tag">{{ pat.strip() }}</span>
+        {% endfor %}
+        {% if b.bucket_role == 'lookup' and b.lookup_divisor %}
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:4px">Per {{ '{:,.0f}'.format(b.lookup_divisor) }} requests = 1 unit</div>
+        {% endif %}
+        {% if b.require_list_cost_gt_zero %}
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:2px">Requires list_cost &gt; 0</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% if not buckets %}
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted)">No buckets configured. <a href="/cdn-setup" style="color:var(--accent)">Set up formulas</a></div>
+      {% endif %}
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:3px">Global filter</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted)">SKUs where after_discount &lt; 1 are excluded</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- EMPTY STATE -->
+<div id="empty-state" class="card" style="text-align:center;padding:60px">
+  <div style="font-size:44px;margin-bottom:16px;opacity:0.4">&#9729;</div>
+  <h2 style="margin-bottom:8px;font-size:18px">Select a date range to analyse CDN costs</h2>
+  <p style="color:var(--muted);font-size:13px">Data is aggregated from your saved billing history runs</p>
+</div>
+<div id="no-data-state" class="card" style="display:none;text-align:center;padding:40px">
+  <div style="font-size:36px;margin-bottom:10px;opacity:0.4">&#8709;</div>
+  <h2 style="font-size:16px;margin-bottom:6px">No CDN SKUs found</h2>
+  <p style="color:var(--muted);font-size:13px">No rows matched CDN patterns in this date range, or all matched rows had after_discount &lt; 1.</p>
+</div>
+
+<!-- RESULTS -->
+<div id="results" style="display:none">
+
+  <!-- TABLE 1: Overall Summary -->
+  <div class="card cdn-section" id="summary-card">
+    <div class="tbl-label">Table 1 — Overall CDN Summary</div>
+    <div id="summary-range-label" class="tbl-sublabel"></div>
+    <div class="table-wrap" style="max-width:600px">
+      <table id="summary-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th style="text-align:right">Value</th>
+          </tr>
+        </thead>
+        <tbody id="summary-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TABLE 2: CDN Cost Breakdown -->
+  <div class="card cdn-section" id="items-card">
+    <div class="tbl-label">Table 2 — CDN Cost Breakdown</div>
+    <div class="tbl-sublabel">
+      Cache Lookup per-unit cost = discounted price / (lookup count / 10,000)
+    </div>
+    <div class="table-wrap">
+      <table id="items-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th style="text-align:right">Usage Amount</th>
+            <th>Usage Unit</th>
+            <th style="text-align:right">Discounted Price</th>
+            <th style="text-align:right">Discounted / Unit</th>
+            <th style="text-align:right">List Cost</th>
+            <th style="text-align:right">List / Unit</th>
+          </tr>
+        </thead>
+        <tbody id="items-tbody"></tbody>
+        <tfoot id="items-tfoot"></tfoot>
+      </table>
+    </div>
+  </div>
+
+  <!-- TABLE 3: Cache Fill SKUs -->
+  <div class="card cdn-section" id="fill-card">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div class="tbl-label" style="border-bottom:none;padding-bottom:0">Table 3 — Cache Fill / Miss SKUs</div>
+      <span id="fill-pill" class="pill" style="background:rgba(248,113,113,0.12);color:#f87171;border:1px solid rgba(248,113,113,0.25)"></span>
+    </div>
+    <div class="tbl-sublabel">Individual SKUs matched by: cache fill · cdn cache fill · download (Cloud Storage)</div>
+    <div class="table-wrap">
+      <table id="fill-table">
+        <thead>
+          <tr>
+            <th>Cache Fill SKU</th>
+            <th style="text-align:right">Usage Amount</th>
+            <th>Usage Unit</th>
+            <th style="text-align:right">Discounted Price</th>
+            <th style="text-align:right">List Cost</th>
+          </tr>
+        </thead>
+        <tbody id="fill-tbody"></tbody>
+        <tfoot id="fill-tfoot"></tfoot>
+      </table>
+    </div>
+  </div>
+
+  <!-- Daily chart -->
+  <div class="card cdn-section" id="chart-card" style="display:none">
+    <div class="tbl-label">Daily Cost — Cache Hit vs Cache Miss</div>
+    <canvas id="cdn-chart" height="80"></canvas>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<script>
+// State
+let mode     = 'date';
+let allDates = [], allMonths = [];
+let cdnChart = null;
+let lastData = null;
+
+// Init — load available dates
+(async () => {
+  try {
+    const res  = await fetch('/api/cdn/dates');
+    const data = await res.json();
+    allDates  = data.dates  || [];
+    allMonths = data.months || [];
+
+    const sdSel = document.getElementById('sel-date');
+    allDates.forEach(d => { const o = document.createElement('option'); o.value=d; o.textContent=d; sdSel.appendChild(o); });
+
+    const smSel = document.getElementById('sel-month');
+    allMonths.forEach(m => { const o = document.createElement('option'); o.value=m; o.textContent=m; smSel.appendChild(o); });
+
+    const today = new Date();
+    document.getElementById('range-end').value   = today.toISOString().slice(0,10);
+    const d30 = new Date(today); d30.setDate(d30.getDate()-30);
+    document.getElementById('range-start').value = d30.toISOString().slice(0,10);
+  } catch(e) { console.error('date load:', e); }
+})();
+
+// Mode toggle
+function setMode(m) {
+  mode = m;
+  ['date','month','range'].forEach(n => {
+    const btn = document.getElementById(`mode-${n}-btn`);
+    const ctl = document.getElementById(`ctrl-${n}`);
+    btn.style.background = (n===m) ? '#1a56db' : 'transparent';
+    btn.style.color      = (n===m) ? '#fff'    : 'var(--muted)';
+    ctl.style.display    = (n===m) ? (n==='range'?'flex':'') : 'none';
+  });
+}
+
+function quickRange(days) {
+  setMode('range');
+  const today = new Date();
+  document.getElementById('range-end').value = today.toISOString().slice(0,10);
+  const s = new Date(today);
+  if (days >= 9000) s.setFullYear(2020, 0, 1);
+  else s.setDate(s.getDate() - days);
+  document.getElementById('range-start').value = s.toISOString().slice(0,10);
+  loadCdn();
+}
+
+function resolveRange() {
+  if (mode === 'date') {
+    const d = document.getElementById('sel-date').value;
+    return d ? { start: d, end: d } : null;
+  }
+  if (mode === 'month') {
+    const m = document.getElementById('sel-month').value;
+    if (!m) return null;
+    const [y, mo] = m.split('-').map(Number);
+    const last = new Date(y, mo, 0).getDate();
+    return { start: `${m}-01`, end: `${m}-${String(last).padStart(2,'0')}` };
+  }
+  const s = document.getElementById('range-start').value;
+  const e = document.getElementById('range-end').value;
+  return (s && e) ? { start: s, end: e } : null;
+}
+
+// Load
+async function loadCdn() {
+  const range = resolveRange();
+  if (!range) { toast('Please select a date / range first', 'error'); return; }
+  if (range.start > range.end) { toast('Start date must be before end date', 'error'); return; }
+
+  const btn = document.getElementById('load-btn');
+  btn.textContent = 'Loading...'; btn.disabled = true;
+  document.getElementById('loading-badge').style.display = '';
+  document.getElementById('empty-state').style.display   = 'none';
+  document.getElementById('no-data-state').style.display = 'none';
+  document.getElementById('results').style.display       = 'none';
+  document.getElementById('download-bar').style.display  = 'none';
+
+  const ar = document.getElementById('active-range');
+  ar.style.display = '';
+  ar.textContent = `Date range: ${range.start}  to  ${range.end}`;
+
+  try {
+    const res  = await fetch(`/api/cdn?start=${range.start}&end=${range.end}`);
+    const data = await res.json();
+    if (data.error) { toast(data.error, 'error'); document.getElementById('empty-state').style.display=''; return; }
+
+    const has = data.items.miss_gb || data.items.hit_gb || data.items.lookup;
+    if (!has) { document.getElementById('no-data-state').style.display=''; return; }
+
+    lastData = data;
+    render(data);
+    document.getElementById('results').style.display      = '';
+    document.getElementById('download-bar').style.display = 'flex';
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+    document.getElementById('empty-state').style.display = '';
+  } finally {
+    btn.textContent = 'Calculate'; btn.disabled = false;
+    document.getElementById('loading-badge').style.display = 'none';
+  }
+}
+
+// Formatting
+function fi(n, d=2) {
+  return '₹' + Number(n||0).toLocaleString('en-IN', { minimumFractionDigits:d, maximumFractionDigits:d });
+}
+function fn(n, d=4) {
+  return Number(n||0).toLocaleString('en-IN', { minimumFractionDigits:d, maximumFractionDigits:d });
+}
+function fCpu(n) {
+  if (!n || n === 0) return '<span style="color:var(--muted)">—</span>';
+  return '₹' + Number(n).toFixed(8).replace(/\.?0+$/, '');
+}
+
+// Render
+function render(data) {
+  const s = data.summary_scalars;
+  document.getElementById('summary-range-label').textContent =
+    `${s.date_range}   ·   ${s.billing_dates} billing date(s)`;
+  renderSummary(s);
+  renderItems(data.items);
+  renderFill(data.fill_skus || []);
+  renderChart(data.timeline || []);
+}
+
+// Table 1
+function renderSummary(s) {
+  const rows = [
+    { label: 'Total GB Used (Hit + Miss data transferred)',   val: fn(s.total_gb_used, 4),         unit: 'GiB / GB' },
+    { label: 'Total Cache Lookup Count (requests)',           val: fn(s.total_lookup_count, 0),     unit: 'requests' },
+    { label: 'Total Discounted Price (all CDN SKUs)',         val: fi(s.total_discounted),          green: true },
+    { label: 'Total List Cost (before discount)',             val: fi(s.total_list_cost) },
+  ];
+  document.getElementById('summary-tbody').innerHTML = rows.map(r => `
+    <tr>
+      <td style="font-size:13px;color:var(--text)">${r.label}</td>
+      <td class="mono" style="text-align:right;font-size:14px;${r.green?'color:var(--green);font-weight:700':''}">${r.val}</td>
+    </tr>`).join('');
+}
+
+// Table 2
+function renderItems(items) {
+  const DEFS = [
+    { key:'miss_gb',  label:'Total Miss GB',        color:'#f87171',
+      note:'Cache fill + download + origin fetch' },
+    { key:'hit_gb',   label:'Total Hit GB',          color:'var(--accent)',
+      note:'Networking / Compute data transfer out + egress' },
+    { key:'lookup',   label:'Total Cache Lookup',    color:'#a78bfa',
+      note:'Lookup requests — per unit = price / (count / 10,000)' },
+  ];
+
+  let totDisc=0, totList=0;
+  const tbody = document.getElementById('items-tbody');
+
+  tbody.innerHTML = DEFS.map(def => {
+    const a = items[def.key];
+    if (!a) return `<tr>
+      <td colspan="7">
+        <span style="background:${def.color}1a;color:${def.color};border:1px solid ${def.color}40;
+              border-radius:5px;padding:2px 10px;font-family:var(--mono);font-size:11px">${def.label}</span>
+        <span style="color:var(--muted);font-size:12px;margin-left:10px">No data</span>
+      </td></tr>`;
+
+    totDisc += a.after_discount;
+    totList += a.list_cost;
+
+    return `<tr>
+      <td>
+        <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:${def.color};
+                    border-left:3px solid ${def.color};padding-left:10px">${def.label}</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);padding-left:13px;margin-top:2px">${def.note}</div>
+      </td>
+      <td class="mono" style="text-align:right">${fn(a.usage_amount, 4)}</td>
+      <td style="font-size:12px;color:var(--muted)">${a.usage_unit || '—'}</td>
+      <td class="mono" style="text-align:right;color:var(--green);font-weight:600">${fi(a.after_discount)}</td>
+      <td class="mono" style="text-align:right;color:var(--accent)">${fCpu(a.disc_cost_per_unit)}</td>
+      <td class="mono" style="text-align:right">${fi(a.list_cost)}</td>
+      <td class="mono" style="text-align:right;color:var(--muted)">${fCpu(a.list_cost_per_unit)}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('items-tfoot').innerHTML = `
+    <tr style="background:var(--surface2);font-weight:700;border-top:2px solid var(--border)">
+      <td style="color:var(--accent);font-family:var(--mono);font-size:11px">TOTAL</td>
+      <td colspan="2"></td>
+      <td class="mono" style="text-align:right;color:var(--green)">${fi(totDisc)}</td>
+      <td></td>
+      <td class="mono" style="text-align:right">${fi(totList)}</td>
+      <td></td>
+    </tr>`;
+}
+
+// Table 3
+function renderFill(skus) {
+  document.getElementById('fill-pill').textContent = `${skus.length} SKU${skus.length!==1?'s':''}`;
+  const tbody = document.getElementById('fill-tbody');
+  const tfoot = document.getElementById('fill-tfoot');
+
+  if (!skus.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">No cache fill / miss SKUs found</td></tr>`;
+    tfoot.innerHTML = '';
+    return;
+  }
+
+  let totDisc=0, totList=0;
+  tbody.innerHTML = skus.map(s => {
+    totDisc += s.after_discount;
+    totList += s.list_cost;
+    return `<tr>
+      <td style="font-family:var(--mono);font-size:11px;word-break:break-word;max-width:400px">${s.sku}</td>
+      <td class="mono" style="text-align:right">${fn(s.usage_amount, 4)}</td>
+      <td style="font-size:12px;color:var(--muted)">${s.usage_unit || '—'}</td>
+      <td class="mono" style="text-align:right;color:var(--green)">${fi(s.after_discount)}</td>
+      <td class="mono" style="text-align:right">${fi(s.list_cost)}</td>
+    </tr>`;
+  }).join('');
+
+  tfoot.innerHTML = `
+    <tr style="background:var(--surface2);font-weight:700;border-top:2px solid var(--border)">
+      <td style="color:#f87171;font-family:var(--mono);font-size:11px">TOTAL</td>
+      <td colspan="2"></td>
+      <td class="mono" style="text-align:right;color:var(--green)">${fi(totDisc)}</td>
+      <td class="mono" style="text-align:right">${fi(totList)}</td>
+    </tr>`;
+}
+
+// Chart
+function renderChart(timeline) {
+  const card = document.getElementById('chart-card');
+  if (!timeline.length) { card.style.display='none'; return; }
+  card.style.display='';
+  if (cdnChart) { cdnChart.destroy(); cdnChart=null; }
+
+  cdnChart = new Chart(document.getElementById('cdn-chart'), {
+    type: 'bar',
+    data: {
+      labels: timeline.map(t => t.date),
+      datasets: [
+        { label:'Cache Hit Cost',  data: timeline.map(t=>t.hit_cost),
+          backgroundColor:'rgba(0,229,255,0.4)', borderColor:'#00e5ff', borderWidth:1, borderRadius:3 },
+        { label:'Cache Miss Cost', data: timeline.map(t=>t.miss_cost),
+          backgroundColor:'rgba(248,113,113,0.4)', borderColor:'#f87171', borderWidth:1, borderRadius:3 },
+      ]
+    },
+    options: {
+      responsive:true,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{color:'#94a3b8',font:{family:'Space Mono',size:11}}},
+        tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ₹${Number(c.parsed.y).toLocaleString('en-IN',{minimumFractionDigits:2})}`}}
+      },
+      scales:{
+        x:{ticks:{color:'#64748b',font:{family:'Space Mono',size:10},maxTicksLimit:14},grid:{color:'#1e2d3d'}},
+        y:{ticks:{color:'#64748b',font:{family:'Space Mono',size:10},
+                  callback:v=>'₹'+Number(v).toLocaleString('en-IN',{maximumFractionDigits:0})},grid:{color:'#1e2d3d'}}
+      }
+    }
+  });
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+async function captureCanvas() {
+  return html2canvas(document.getElementById('results'), {
+    backgroundColor: '#06090f', scale: 2, useCORS: true, logging: false,
+  });
+}
+
+async function exportPng() {
+  toast('Generating PNG...', 'info');
+  try {
+    const c = await captureCanvas();
+    const a = document.createElement('a');
+    a.download = `cdn-report-${Date.now()}.png`;
+    a.href = c.toDataURL('image/png');
+    a.click();
+  } catch(e) { toast('PNG failed: ' + e.message, 'error'); }
+}
+
+async function exportJpg() {
+  toast('Generating JPG...', 'info');
+  try {
+    const c = await captureCanvas();
+    const a = document.createElement('a');
+    a.download = `cdn-report-${Date.now()}.jpg`;
+    a.href = c.toDataURL('image/jpeg', 0.92);
+    a.click();
+  } catch(e) { toast('JPG failed: ' + e.message, 'error'); }
+}
+
+async function exportPdf() {
+  toast('Generating PDF...', 'info');
+  try {
+    const c = await captureCanvas();
+    const { jsPDF } = window.jspdf;
+    const w = c.width, h = c.height;
+    const pdf = new jsPDF({ orientation: w>h?'l':'p', unit:'px', format:[w/2,h/2] });
+    pdf.addImage(c.toDataURL('image/jpeg',0.9),'JPEG',0,0,w/2,h/2);
+    pdf.save(`cdn-report-${Date.now()}.pdf`);
+  } catch(e) { toast('PDF failed: ' + e.message, 'error'); }
+}
+
+function exportXlsx() {
+  if (!lastData) { toast('No data loaded', 'error'); return; }
+  toast('Generating XLSX...', 'info');
+  try {
+    const wb = XLSX.utils.book_new();
+    const s  = lastData.summary_scalars;
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Metric','Value'],
+      ['Total GB Used (Hit + Miss)',  s.total_gb_used],
+      ['Total Cache Lookup Count',    s.total_lookup_count],
+      ['Total Discounted Price',      s.total_discounted],
+      ['Total List Cost',             s.total_list_cost],
+      ['Billing Dates in Range',      s.billing_dates],
+      ['Date Range',                  s.date_range],
+    ]), 'Summary');
+
+    const itemMap = { miss_gb:'Total Miss GB', hit_gb:'Total Hit GB', lookup:'Total Cache Lookup' };
+    const iRows = [['Item','Usage Amount','Usage Unit','Discounted Price','Disc/Unit','List Cost','List/Unit']];
+    Object.entries(lastData.items).forEach(([k,a]) => {
+      if (!a) return;
+      iRows.push([itemMap[k]||k, a.usage_amount, a.usage_unit, a.after_discount,
+                  a.disc_cost_per_unit, a.list_cost, a.list_cost_per_unit]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(iRows), 'CDN Breakdown');
+
+    const fRows = [['Cache Fill SKU','Usage Amount','Usage Unit','Discounted Price','List Cost']];
+    (lastData.fill_skus||[]).forEach(r => fRows.push([r.sku,r.usage_amount,r.usage_unit,r.after_discount,r.list_cost]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(fRows), 'Cache Fill SKUs');
+
+    XLSX.writeFile(wb, `cdn-report-${Date.now()}.xlsx`);
+  } catch(e) { toast('XLSX failed: ' + e.message, 'error'); }
+}
+</script>
+{% endblock %}

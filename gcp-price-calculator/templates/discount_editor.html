@@ -1,0 +1,577 @@
+{% extends "base.html" %}
+{% block title %}Discount File Editor — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}Discount File Editor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Discount Editor</h1>
+  <p>Manage SKU discounts stored in the database. Import an <code style="font-family:var(--mono);font-size:12px;color:var(--accent);background:rgba(0,229,255,0.08);padding:2px 7px;border-radius:4px">.xlsx</code> file to bulk-load discounts, or add/edit SKUs individually below.</p>
+</div>
+
+<div class="stats-grid" style="margin-bottom:24px">
+  <div class="stat-card">
+    <div class="stat-label">Total SKUs</div>
+    <div class="stat-value" id="stat-total">{{ sku_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Services</div>
+    <div class="stat-value yellow" id="stat-services">{{ services | length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Pending Changes</div>
+    <div class="stat-value" id="stat-pending" style="color:var(--muted)">0</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Last Saved</div>
+    <div class="stat-value" id="stat-saved" style="font-size:13px;color:var(--muted)">—</div>
+  </div>
+</div>
+
+<!-- ── Import Panel ──────────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:20px;border:1px solid rgba(0,229,255,0.2)">
+  <div class="card-header" style="flex-wrap:wrap;gap:12px">
+    <span class="card-title">📥 Import Discounts from XLSX</span>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">File format:</span>
+      <div style="display:flex;background:var(--surface2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <button id="fmt-old-btn" onclick="setFormatHint('old')"
+          style="padding:5px 14px;font-size:11px;font-family:var(--mono);border:none;cursor:pointer;background:#1a56db;color:#fff">
+          Old Format
+        </button>
+        <button id="fmt-new-btn" onclick="setFormatHint('new')"
+          style="padding:5px 14px;font-size:11px;font-family:var(--mono);border:none;cursor:pointer;background:transparent;color:var(--muted)">
+          New Format
+        </button>
+      </div>
+      <a href="/download/sample-discount-old" style="font-family:var(--mono);font-size:11px;color:var(--accent);text-decoration:none;border:1px solid rgba(0,229,255,0.25);border-radius:6px;padding:4px 10px">⬇ Sample Old</a>
+      <a href="/download/sample-discount-new" style="font-family:var(--mono);font-size:11px;color:#10b981;text-decoration:none;border:1px solid rgba(16,185,129,0.25);border-radius:6px;padding:4px 10px">⬇ Sample New</a>
+    </div>
+  </div>
+
+  <div id="fmt-hint-old" style="background:rgba(26,86,219,0.08);border:1px solid rgba(26,86,219,0.2);border-radius:8px;padding:10px 16px;margin-bottom:14px;font-family:var(--mono);font-size:11px;color:#93c5fd">
+    <strong>Old Format columns:</strong> &nbsp;Service description &nbsp;·&nbsp; SKU description &nbsp;·&nbsp; Discount (fraction e.g. 0.15)
+    &nbsp;|&nbsp; <em>All SKUs use <strong>discount</strong> pricing model</em>
+  </div>
+  <div id="fmt-hint-new" style="display:none;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);border-radius:8px;padding:10px 16px;margin-bottom:14px;font-family:var(--mono);font-size:11px;color:#6ee7b7">
+    <strong>New Format columns:</strong> &nbsp;service_description &nbsp;·&nbsp; sku_description &nbsp;·&nbsp; pricing_model &nbsp;·&nbsp; discount &nbsp;·&nbsp; unit_price
+    <br><em>pricing_model=<strong>discount</strong>: after = list_cost×(1−discount) &nbsp;|&nbsp; pricing_model=<strong>unit</strong>: after = usage_amount×unit_price</em>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <label style="display:inline-flex;align-items:center;gap:10px;background:var(--surface2);border:1px dashed var(--border);border-radius:8px;padding:10px 18px;cursor:pointer"
+           id="import-label" ondragover="event.preventDefault()" ondrop="handleDrop(event)">
+      <span style="font-size:18px">📂</span>
+      <span id="import-filename" style="font-family:var(--mono);font-size:12px;color:var(--muted)">Choose .xlsx file or drag &amp; drop</span>
+      <input type="file" id="import-file" accept=".xlsx,.xls" style="display:none" onchange="onImportFileChange(this)"/>
+    </label>
+    <button class="btn btn-primary" id="import-check-btn" onclick="checkImport()" disabled>🔍 Validate &amp; Preview</button>
+    <span id="import-status" style="font-family:var(--mono);font-size:11px;color:var(--muted)"></span>
+  </div>
+</div>
+
+<!-- ── Duplicate Resolution Modal ──────────────────────────────────────────── -->
+<div id="dup-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:300;align-items:flex-start;justify-content:center;overflow-y:auto;padding:32px 16px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;width:100%;max-width:980px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,0.5)">
+    <div style="background:linear-gradient(135deg,#1e3a5f,#1a56db);padding:24px 28px;display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:4px">📋 Import Preview — Resolve Duplicates</div>
+        <div style="font-size:12px;color:#93c5fd" id="dup-summary-line"></div>
+      </div>
+      <button onclick="closeDupModal()" style="background:rgba(255,255,255,0.15);border:none;color:#fff;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:18px;line-height:1">✕</button>
+    </div>
+    <div id="dup-bulk-bar" style="display:none;background:rgba(0,229,255,0.05);border-bottom:1px solid var(--border);padding:14px 24px;gap:10px;align-items:center;flex-wrap:wrap">
+      <span style="font-family:var(--mono);font-size:11px;color:var(--accent);margin-right:6px">Apply to ALL duplicates:</span>
+      <button class="btn btn-sm btn-secondary" onclick="bulkDupAction('skip')">⏭ Skip All</button>
+      <button class="btn btn-sm" onclick="bulkDupAction('override')" style="background:rgba(239,68,68,0.15);border-color:#ef4444;color:#ef4444">🔄 Override All</button>
+      <button class="btn btn-sm" onclick="bulkDupAction('update_discount')" style="background:rgba(234,179,8,0.15);border-color:#eab308;color:#eab308">💲 Update Pricing All</button>
+    </div>
+    <div style="max-height:480px;overflow-y:auto;padding:0 8px 8px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead style="position:sticky;top:0;background:var(--surface);z-index:1">
+          <tr style="border-bottom:2px solid var(--border)">
+            <th style="padding:10px 12px;text-align:left;font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Status</th>
+            <th style="padding:10px 12px;text-align:left;font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Service</th>
+            <th style="padding:10px 12px;text-align:left;font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">SKU</th>
+            <th style="padding:10px 12px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Model</th>
+            <th style="padding:10px 12px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Incoming</th>
+            <th style="padding:10px 12px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Existing</th>
+            <th style="padding:10px 12px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;min-width:220px">Action</th>
+          </tr>
+        </thead>
+        <tbody id="dup-table-body"></tbody>
+      </table>
+    </div>
+    <div style="border-top:1px solid var(--border);padding:18px 24px;display:flex;align-items:center;gap:14px;background:var(--surface)">
+      <button class="btn btn-primary" id="dup-commit-btn" onclick="commitImport()">✅ Confirm Import</button>
+      <button class="btn btn-secondary" onclick="closeDupModal()">Cancel</button>
+      <span id="dup-action-summary" style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add / Edit form ──────────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:20px">
+  <div class="card-header">
+    <span class="card-title" id="form-title">➕ Add New SKU</span>
+    <button class="btn btn-secondary btn-sm" id="cancel-edit-btn" onclick="cancelEdit()" style="display:none">✕ Cancel Edit</button>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 2fr;gap:14px;margin-bottom:14px">
+    <div>
+      <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Service Description</label>
+      <input type="text" id="inp-service" placeholder="e.g. Compute Engine" list="service-list"
+        style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:14px;font-family:var(--sans);outline:none;box-sizing:border-box"
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" oninput="onFormChange()"/>
+      <datalist id="service-list">{% for s in services %}<option value="{{ s }}">{% endfor %}</datalist>
+    </div>
+    <div>
+      <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">SKU Description</label>
+      <input type="text" id="inp-sku" placeholder="e.g. N1 Predefined Instance Core running..."
+        style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:14px;font-family:var(--sans);outline:none;box-sizing:border-box"
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" oninput="onFormChange()"/>
+    </div>
+  </div>
+  <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap">
+    <div>
+      <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Pricing Model</label>
+      <div style="display:flex;background:var(--surface2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <button id="pm-discount-btn" onclick="setPricingModel('discount')"
+          style="padding:8px 18px;font-size:12px;font-family:var(--mono);border:none;cursor:pointer;background:#1a56db;color:#fff">
+          % Discount
+        </button>
+        <button id="pm-unit-btn" onclick="setPricingModel('unit')"
+          style="padding:8px 18px;font-size:12px;font-family:var(--mono);border:none;cursor:pointer;background:transparent;color:var(--muted)">
+          Unit Price
+        </button>
+      </div>
+    </div>
+    <div id="field-discount">
+      <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Discount %</label>
+      <input type="number" id="inp-discount" placeholder="0" min="0" max="100" step="0.01"
+        style="width:120px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:14px;font-family:var(--mono);outline:none"
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" oninput="onFormChange()"/>
+    </div>
+    <div id="field-unit" style="display:none">
+      <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Unit Price (₹ per usage unit)</label>
+      <input type="number" id="inp-unit-price" placeholder="0.0000" min="0" step="0.0001"
+        style="width:180px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:14px;font-family:var(--mono);outline:none"
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" oninput="onFormChange()"/>
+    </div>
+    <div>
+      <label style="display:block;font-family:var(--mono);font-size:10px;color:transparent;margin-bottom:6px">.</label>
+      <button class="btn btn-primary" id="upsert-btn" onclick="upsertSku()" disabled>
+        <span id="upsert-label">➕ Add SKU</span>
+      </button>
+    </div>
+  </div>
+  <div id="form-feedback" style="margin-top:10px;font-size:12px;font-family:var(--mono);color:var(--muted);min-height:18px"></div>
+</div>
+
+<!-- Save bar -->
+<div id="save-bar" style="display:none;background:rgba(0,229,255,0.06);border:1px solid rgba(0,229,255,0.25);border-radius:10px;padding:14px 20px;margin-bottom:20px;align-items:center;gap:14px">
+  <span style="font-family:var(--mono);font-size:12px;color:var(--accent)">⚠ You have unsaved changes</span>
+  <button class="btn btn-primary btn-sm" onclick="saveAll()" id="save-btn">💾 Save to DB</button>
+  <button class="btn btn-secondary btn-sm" onclick="discardAll()">✕ Discard</button>
+  <span id="pending-list" style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-left:auto"></span>
+</div>
+
+<!-- SKU Table -->
+<div class="card">
+  <div class="filter-row" style="margin-bottom:16px">
+    <div class="search-bar" style="flex:1;max-width:320px">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search" placeholder="Search SKU or service..." oninput="filterTable()"/>
+    </div>
+    <select id="svc-filter" onchange="filterTable()" style="width:auto;min-width:160px">
+      <option value="">All Services</option>
+      {% for s in services %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    </select>
+    <select id="model-filter" onchange="filterTable()" style="width:auto;min-width:140px">
+      <option value="">All Models</option>
+      <option value="discount">% Discount</option>
+      <option value="unit">Unit Price</option>
+    </select>
+    <span id="row-count" class="pill pill-blue">{{ sku_count }} SKUs</span>
+  </div>
+  <div class="table-wrap" style="max-height:560px;overflow-y:auto">
+    <table id="sku-table">
+      <thead>
+        <tr>
+          <th style="cursor:pointer" onclick="sortBy('service')">Service ↕</th>
+          <th style="cursor:pointer" onclick="sortBy('sku')">SKU Description ↕</th>
+          <th style="text-align:center;width:110px">Pricing Model</th>
+          <th style="cursor:pointer;text-align:right;width:170px" onclick="sortBy('disc')">Discount / Unit Price ↕</th>
+          <th style="width:110px;text-align:center">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="sku-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Delete Confirm Modal -->
+<div id="delete-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:28px;max-width:460px;width:90%">
+    <div style="font-family:var(--mono);font-size:11px;color:var(--red);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px">⚠ Confirm Delete</div>
+    <div style="font-size:14px;color:var(--text);margin-bottom:6px">Remove this SKU from the discount table?</div>
+    <div id="delete-sku-name" style="font-family:var(--mono);font-size:11px;color:var(--muted);word-break:break-word;margin-bottom:20px"></div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-sm" onclick="confirmDelete()" style="background:var(--red);color:#fff;border-color:var(--red)">Delete</button>
+      <button class="btn btn-secondary btn-sm" onclick="closeDeleteModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let skus = {{ skus | tojson }};
+let pending = {};
+let editingKey = null;
+let deleteTarget = null;
+let filtered = [];
+let sortKey = 'service', sortDir = 1;
+let currentPricingModel = 'discount';
+
+// ── Format hint toggle ─────────────────────────────────────────────────────────
+function setFormatHint(fmt) {
+  const ob = document.getElementById('fmt-old-btn'), nb = document.getElementById('fmt-new-btn');
+  const oh = document.getElementById('fmt-hint-old'), nh = document.getElementById('fmt-hint-new');
+  if (fmt === 'old') {
+    ob.style.background='#1a56db'; ob.style.color='#fff';
+    nb.style.background='transparent'; nb.style.color='var(--muted)';
+    oh.style.display=''; nh.style.display='none';
+  } else {
+    nb.style.background='#059669'; nb.style.color='#fff';
+    ob.style.background='transparent'; ob.style.color='var(--muted)';
+    nh.style.display=''; oh.style.display='none';
+  }
+}
+
+// ── Pricing model toggle (form) ────────────────────────────────────────────────
+function setPricingModel(model) {
+  currentPricingModel = model;
+  const db = document.getElementById('pm-discount-btn'), ub = document.getElementById('pm-unit-btn');
+  const fd = document.getElementById('field-discount'), fu = document.getElementById('field-unit');
+  if (model === 'discount') {
+    db.style.background='#1a56db'; db.style.color='#fff';
+    ub.style.background='transparent'; ub.style.color='var(--muted)';
+    fd.style.display=''; fu.style.display='none';
+  } else {
+    ub.style.background='#059669'; ub.style.color='#fff';
+    db.style.background='transparent'; db.style.color='var(--muted)';
+    fu.style.display=''; fd.style.display='none';
+  }
+  onFormChange();
+}
+
+// ── Filtering / Sorting ───────────────────────────────────────────────────────
+function filterTable() {
+  const q     = document.getElementById('search').value.toLowerCase();
+  const svc   = document.getElementById('svc-filter').value;
+  const model = document.getElementById('model-filter').value;
+  filtered = skus.filter(s => {
+    if (q && !s.sku.toLowerCase().includes(q) && !s.service.toLowerCase().includes(q)) return false;
+    if (svc && s.service !== svc) return false;
+    if (model && (s.pricing_model||'discount') !== model) return false;
+    return true;
+  });
+  sortAndRender();
+}
+function sortBy(key) {
+  if (sortKey===key) sortDir*=-1; else { sortKey=key; sortDir=1; }
+  sortAndRender();
+}
+function sortAndRender() {
+  filtered.sort((a,b)=>{
+    const av = sortKey==='disc'?a.discount_pct:sortKey==='sku'?a.sku:a.service;
+    const bv = sortKey==='disc'?b.discount_pct:sortKey==='sku'?b.sku:b.service;
+    return typeof av==='string'?av.localeCompare(bv)*sortDir:(av-bv)*sortDir;
+  });
+  renderTable();
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+const svcColors={'Compute Engine':'pill-blue','Networking':'pill-purple','Cloud Storage':'pill-yellow',
+  'BigQuery':'pill-green','Kubernetes Engine':'pill-blue','Cloud Monitoring':'pill-purple',
+  'Cloud Logging':'pill-yellow','Cloud DNS':'pill-green','Certificate Manager':'pill-purple'};
+
+function renderTable() {
+  const tbody = document.getElementById('sku-body');
+  tbody.innerHTML = filtered.map(s => {
+    const p         = pending[s.sku];
+    const isDeleted = p && p.action==='delete';
+    const isEdited  = p && (p.action==='edit'||p.action==='add');
+    const isEditing = editingKey===s.sku;
+    const pm        = (isEdited?p.pricing_model:s.pricing_model)||'discount';
+    const discPct   = isEdited?p.discount_pct:s.discount_pct;
+    const unitPrice = isEdited?p.unit_price:s.unit_price;
+
+    let rowStyle='';
+    if (isDeleted) rowStyle='opacity:0.4;text-decoration:line-through';
+    else if (isEdited) rowStyle='background:rgba(0,229,255,0.04)';
+    if (isEditing) rowStyle+=';outline:2px solid var(--accent);outline-offset:-2px;border-radius:6px';
+
+    const badge = p?(p.action==='delete'
+      ?`<span class="pill" style="background:rgba(255,77,109,0.15);color:var(--red);border:1px solid rgba(255,77,109,0.3);font-size:9px;margin-left:6px">DEL</span>`
+      :p.action==='add'
+      ?`<span class="pill" style="background:rgba(0,255,135,0.12);color:var(--green);border:1px solid rgba(0,255,135,0.25);font-size:9px;margin-left:6px">NEW</span>`
+      :`<span class="pill" style="background:rgba(0,229,255,0.1);color:var(--accent);border:1px solid rgba(0,229,255,0.2);font-size:9px;margin-left:6px">MOD</span>`):'';
+
+    const modelBadge = pm==='unit'
+      ?`<span style="background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);border-radius:5px;padding:2px 8px;font-family:var(--mono);font-size:10px">unit</span>`
+      :`<span style="background:rgba(26,86,219,0.15);color:#60a5fa;border:1px solid rgba(26,86,219,0.3);border-radius:5px;padding:2px 8px;font-family:var(--mono);font-size:10px">discount</span>`;
+
+    let valueCell;
+    if (pm==='unit') {
+      const up = unitPrice!=null?'₹'+parseFloat(unitPrice).toFixed(4):'—';
+      valueCell=`<td style="text-align:right"><span class="mono" style="color:#10b981">${up}</span></td>`;
+    } else {
+      valueCell=`<td style="text-align:right">
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px">
+          <div style="width:60px"><div class="progress"><div class="progress-bar" style="width:${discPct}%"></div></div></div>
+          <span class="mono" style="color:${discPct>50?'var(--green)':discPct>20?'var(--accent)':'var(--muted)'};width:48px;text-align:right">${discPct}%</span>
+        </div></td>`;
+    }
+
+    const actions = isDeleted
+      ?`<button class="btn btn-secondary btn-sm" onclick="undoDelete('${escJs(s.sku)}')">↩ Undo</button>`
+      :`<button class="btn btn-secondary btn-sm" onclick="startEdit('${escJs(s.sku)}')" style="${isEditing?'border-color:var(--accent);color:var(--accent)':''}">✏️</button>
+        <button class="btn btn-sm" onclick="openDeleteModal('${escJs(s.sku)}')" style="background:rgba(255,77,109,0.12);color:var(--red);border-color:rgba(255,77,109,0.3);margin-left:4px">🗑</button>`;
+
+    return `<tr style="${rowStyle}">
+      <td><span class="pill ${svcColors[s.service]||'pill-blue'}">${s.service}</span></td>
+      <td class="mono" style="font-size:12px;max-width:400px;word-break:break-word">${s.sku}${badge}</td>
+      <td style="text-align:center">${modelBadge}</td>
+      ${valueCell}
+      <td style="text-align:center">${actions}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('row-count').textContent=filtered.length+' SKUs';
+}
+function escJs(str){return str.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"');}
+
+// ── Form helpers ──────────────────────────────────────────────────────────────
+function onFormChange() {
+  const svc=document.getElementById('inp-service').value.trim();
+  const sku=document.getElementById('inp-sku').value.trim();
+  let valid=svc.length>0&&sku.length>0;
+  if (currentPricingModel==='discount') {
+    const d=document.getElementById('inp-discount').value;
+    valid=valid&&d!==''&&parseFloat(d)>=0&&parseFloat(d)<=100;
+  } else {
+    const u=document.getElementById('inp-unit-price').value;
+    valid=valid&&u!==''&&parseFloat(u)>=0;
+  }
+  document.getElementById('upsert-btn').disabled=!valid;
+  if (editingKey) return;
+  const exists=skus.find(s=>s.sku===sku);
+  const fb=document.getElementById('form-feedback');
+  if (sku&&exists){fb.style.color='var(--yellow)';fb.textContent=`⚠ SKU already exists under "${exists.service}" — saving will update it.`;document.getElementById('upsert-label').textContent='✏️ Update SKU';}
+  else if(sku){fb.style.color='var(--muted)';fb.textContent='';document.getElementById('upsert-label').textContent='➕ Add SKU';}
+  else{fb.textContent='';document.getElementById('upsert-label').textContent='➕ Add SKU';}
+}
+
+// ── Add / Edit ────────────────────────────────────────────────────────────────
+function upsertSku() {
+  const svc=document.getElementById('inp-service').value.trim();
+  const sku=document.getElementById('inp-sku').value.trim();
+  const pm=currentPricingModel;
+  if (!svc||!sku) return;
+  let disc=0,unit_price=null;
+  if (pm==='discount') disc=parseFloat(document.getElementById('inp-discount').value)||0;
+  else unit_price=parseFloat(document.getElementById('inp-unit-price').value)||0;
+
+  const existing=skus.find(s=>s.sku===sku);
+  const baseAction=editingKey?'edit':(existing?(pending[sku]?.action==='add'?'add':'edit'):'add');
+  const payload={action:baseAction,service:svc,sku,pricing_model:pm,discount_pct:disc,unit_price};
+
+  if (existing){existing.discount_pct=disc;existing.pricing_model=pm;existing.unit_price=unit_price;pending[sku]=payload;}
+  else{skus.push({service:svc,sku,discount_pct:disc,pricing_model:pm,unit_price});pending[sku]=payload;}
+
+  cancelEdit();filterTable();updatePendingUI();
+  toast(existing?'SKU updated — save to persist':'SKU added — save to persist','success');
+}
+
+function startEdit(skuDesc) {
+  const s=skus.find(x=>x.sku===skuDesc);if(!s)return;
+  editingKey=skuDesc;
+  const pm=pending[skuDesc]?.pricing_model??s.pricing_model??'discount';
+  document.getElementById('inp-service').value=s.service;
+  document.getElementById('inp-sku').value=s.sku;
+  document.getElementById('inp-sku').readOnly=true;
+  document.getElementById('inp-sku').style.opacity='0.6';
+  setPricingModel(pm);
+  if (pm==='discount') document.getElementById('inp-discount').value=pending[skuDesc]?.discount_pct??s.discount_pct;
+  else document.getElementById('inp-unit-price').value=pending[skuDesc]?.unit_price??s.unit_price??'';
+  document.getElementById('form-title').textContent='✏️ Editing SKU';
+  document.getElementById('cancel-edit-btn').style.display='';
+  document.getElementById('upsert-label').textContent='💾 Save Changes';
+  document.getElementById('upsert-btn').disabled=false;
+  document.getElementById('form-feedback').style.color='var(--accent)';
+  document.getElementById('form-feedback').textContent=`Editing: ${skuDesc.substring(0,80)}${skuDesc.length>80?'…':''}`;
+  document.getElementById('inp-service').focus();renderTable();
+}
+function cancelEdit() {
+  editingKey=null;
+  document.getElementById('inp-service').value='';document.getElementById('inp-sku').value='';
+  document.getElementById('inp-discount').value='';document.getElementById('inp-unit-price').value='';
+  document.getElementById('inp-sku').readOnly=false;document.getElementById('inp-sku').style.opacity='1';
+  document.getElementById('form-title').textContent='➕ Add New SKU';
+  document.getElementById('cancel-edit-btn').style.display='none';
+  document.getElementById('upsert-label').textContent='➕ Add SKU';
+  document.getElementById('upsert-btn').disabled=true;
+  document.getElementById('form-feedback').textContent='';
+  setPricingModel('discount');renderTable();
+}
+
+// ── Delete ─────────────────────────────────────────────────────────────────────
+function openDeleteModal(skuDesc){deleteTarget=skuDesc;document.getElementById('delete-sku-name').textContent=skuDesc;document.getElementById('delete-modal').style.display='flex';}
+function closeDeleteModal(){deleteTarget=null;document.getElementById('delete-modal').style.display='none';}
+function confirmDelete(){
+  if(!deleteTarget)return;
+  const wasNew=pending[deleteTarget]?.action==='add';
+  if(wasNew){skus=skus.filter(s=>s.sku!==deleteTarget);delete pending[deleteTarget];}
+  else pending[deleteTarget]={action:'delete',sku:deleteTarget};
+  closeDeleteModal();filterTable();updatePendingUI();toast('SKU marked for deletion — save to persist','warn');
+}
+function undoDelete(skuDesc){delete pending[skuDesc];filterTable();updatePendingUI();toast('Delete undone','success');}
+
+// ── Pending UI ────────────────────────────────────────────────────────────────
+function updatePendingUI(){
+  const count=Object.keys(pending).length;
+  document.getElementById('stat-pending').textContent=count;
+  document.getElementById('stat-pending').style.color=count>0?'var(--accent)':'var(--muted)';
+  document.getElementById('save-bar').style.display=count>0?'flex':'none';
+  const adds=Object.values(pending).filter(p=>p.action==='add').length;
+  const edits=Object.values(pending).filter(p=>p.action==='edit').length;
+  const deletes=Object.values(pending).filter(p=>p.action==='delete').length;
+  const parts=[];if(adds)parts.push(`${adds} new`);if(edits)parts.push(`${edits} modified`);if(deletes)parts.push(`${deletes} deleted`);
+  document.getElementById('pending-list').textContent=parts.join(' · ');
+}
+function discardAll(){location.reload();}
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+async function saveAll(){
+  if(!Object.keys(pending).length)return;
+  const btn=document.getElementById('save-btn');btn.innerHTML='⏳ Saving…';btn.disabled=true;
+  try{
+    const res=await fetch('/discount-editor/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({changes:Object.values(pending)})});
+    const data=await res.json();
+    if(data.error){toast(data.error,'error');return;}
+    toast(`Saved! ${data.sku_count} SKUs in database.`,'success');
+    pending={};updatePendingUI();
+    document.getElementById('stat-total').textContent=data.sku_count;
+    document.getElementById('stat-services').textContent=data.service_count;
+    const now=new Date();document.getElementById('stat-saved').textContent=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    document.getElementById('stat-saved').style.color='var(--green)';renderTable();
+  }catch(e){toast('Network error: '+e.message,'error');}
+  finally{btn.innerHTML='💾 Save to DB';btn.disabled=false;}
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg,type='info'){
+  const colors={success:'var(--green)',error:'var(--red)',warn:'var(--yellow)',info:'var(--accent)'};
+  const t=document.createElement('div');
+  t.style.cssText=`position:fixed;bottom:28px;right:28px;z-index:9999;background:var(--surface);border:1px solid ${colors[type]};color:${colors[type]};padding:12px 20px;border-radius:10px;font-family:var(--mono);font-size:12px;box-shadow:0 8px 32px rgba(0,0,0,0.4);transition:opacity 0.4s;pointer-events:none`;
+  t.textContent=msg;document.body.appendChild(t);
+  setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),400);},2800);
+}
+
+// ── Import ────────────────────────────────────────────────────────────────────
+let importRows=[],importFilename='';
+function handleDrop(e){e.preventDefault();const f=e.dataTransfer.files[0];if(f){document.getElementById('import-file').files=e.dataTransfer.files;onImportFileChange(document.getElementById('import-file'));}}
+function onImportFileChange(input){const f=input.files[0];if(!f)return;document.getElementById('import-filename').textContent=f.name;document.getElementById('import-check-btn').disabled=false;document.getElementById('import-status').textContent='';}
+
+async function checkImport(){
+  const input=document.getElementById('import-file');if(!input.files[0])return;
+  const btn=document.getElementById('import-check-btn'),status=document.getElementById('import-status');
+  btn.innerHTML='⏳ Checking…';btn.disabled=true;status.textContent='';
+  try{
+    const fd=new FormData();fd.append('file',input.files[0]);
+    const res=await fetch('/discount-editor/check-import',{method:'POST',body:fd});
+    const data=await res.json();
+    if(data.error){toast(data.error,'error');status.textContent='❌ '+data.error;return;}
+    importRows=data.rows;importFilename=data.filename;
+    setFormatHint(data.file_format||'old');
+    const fmtLabel=data.file_format==='new'?'(New Format ✓)':'(Old Format ✓)';
+    status.textContent=`✅ ${data.total_rows} rows · ${data.new_count} new · ${data.duplicate_count} dup${data.duplicate_count!==1?'s':''} ${fmtLabel}`;
+    openDupModal(data);
+  }catch(e){toast('Network error: '+e.message,'error');status.textContent='❌ '+e.message;}
+  finally{btn.innerHTML='🔍 Validate & Preview';btn.disabled=false;}
+}
+
+function openDupModal(data){
+  document.getElementById('dup-summary-line').textContent=`${data.total_rows} rows · ${data.new_count} new · ${data.duplicate_count} dup · format: ${data.file_format||'old'}`;
+  document.getElementById('dup-bulk-bar').style.display=data.duplicate_count>0?'flex':'none';
+  renderDupTable();document.getElementById('dup-modal').style.display='flex';updateDupActionSummary();
+}
+function closeDupModal(){document.getElementById('dup-modal').style.display='none';}
+
+function renderDupTable(){
+  const tbody=document.getElementById('dup-table-body');
+  tbody.innerHTML=importRows.map((r,i)=>{
+    const isDup=r.is_duplicate,action=r._action||(isDup?'skip':'insert'),pm=r.pricing_model||'discount';
+    const statusCell=isDup
+      ?`<td style="padding:10px 12px"><span style="background:rgba(239,68,68,0.15);color:#ef4444;border-radius:6px;padding:2px 8px;font-family:var(--mono);font-size:10px;white-space:nowrap">⚠ Dup</span></td>`
+      :`<td style="padding:10px 12px"><span style="background:rgba(34,197,94,0.15);color:#22c55e;border-radius:6px;padding:2px 8px;font-family:var(--mono);font-size:10px">✚ New</span></td>`;
+    const modelBadge=pm==='unit'
+      ?`<span style="background:rgba(16,185,129,0.15);color:#10b981;border-radius:4px;padding:2px 7px;font-family:var(--mono);font-size:10px">unit</span>`
+      :`<span style="background:rgba(26,86,219,0.15);color:#60a5fa;border-radius:4px;padding:2px 7px;font-family:var(--mono);font-size:10px">disc</span>`;
+    const inVal=pm==='unit'?(r.unit_price!=null?`₹${parseFloat(r.unit_price).toFixed(4)}`:'—'):`${r.discount_pct}%`;
+    const changed=isDup&&(r.discount_pct!==r.existing_discount_pct||pm!==r.existing_pricing_model||r.unit_price!==r.existing_unit_price);
+    const inClass=changed?'color:#eab308;font-weight:700':'color:var(--text)';
+    const exPm=r.existing_pricing_model||'discount';
+    const exVal=isDup?(exPm==='unit'?(r.existing_unit_price!=null?`₹${parseFloat(r.existing_unit_price).toFixed(4)}`:'—'):`${r.existing_discount_pct}%`):'—';
+    const actionCell=isDup?`
+      <td style="padding:8px 12px;text-align:center">
+        <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">
+          <button onclick="setRowAction(${i},'skip')" style="font-size:10px;padding:4px 10px;border-radius:6px;border:1px solid;cursor:pointer;font-family:var(--mono);${action==='skip'?'background:rgba(107,114,128,0.4);border-color:#6b7280;color:#fff':'background:transparent;border-color:var(--border);color:var(--muted)'}">⏭ Skip</button>
+          <button onclick="setRowAction(${i},'override')" style="font-size:10px;padding:4px 10px;border-radius:6px;border:1px solid;cursor:pointer;font-family:var(--mono);${action==='override'?'background:rgba(239,68,68,0.3);border-color:#ef4444;color:#ef4444':'background:transparent;border-color:var(--border);color:var(--muted)'}">🔄 Override</button>
+          <button onclick="setRowAction(${i},'update_discount')" style="font-size:10px;padding:4px 10px;border-radius:6px;border:1px solid;cursor:pointer;font-family:var(--mono);${action==='update_discount'?'background:rgba(234,179,8,0.3);border-color:#eab308;color:#eab308':'background:transparent;border-color:var(--border);color:var(--muted)'}">💲 Update</button>
+        </div>
+      </td>`:`<td style="padding:8px 12px;text-align:center"><span style="font-family:var(--mono);font-size:10px;color:var(--green)">✚ Will Insert</span></td>`;
+    const rowBg=isDup?(action==='skip'?'rgba(107,114,128,0.05)':'rgba(239,68,68,0.04)'):'transparent';
+    return `<tr style="border-bottom:1px solid var(--border);background:${rowBg}">
+      ${statusCell}
+      <td style="padding:10px 12px;font-size:11px;color:var(--muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escJs(r.service)}">${r.service}</td>
+      <td style="padding:10px 12px;font-family:var(--mono);font-size:11px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escJs(r.sku)}">${r.sku}</td>
+      <td style="padding:10px 12px;text-align:center">${modelBadge}</td>
+      <td style="padding:10px 12px;text-align:right;font-family:var(--mono);font-size:12px;${inClass}">${inVal}</td>
+      <td style="padding:10px 12px;text-align:right;font-family:var(--mono);font-size:12px;color:var(--muted)">${exVal}</td>
+      ${actionCell}
+    </tr>`;
+  }).join('');
+}
+
+function setRowAction(i,action){importRows[i]._action=action;renderDupTable();updateDupActionSummary();}
+function bulkDupAction(action){importRows.forEach(r=>{if(r.is_duplicate)r._action=action;});renderDupTable();updateDupActionSummary();}
+function updateDupActionSummary(){
+  const parts=[];
+  const toIns=importRows.filter(r=>!r.is_duplicate||r._action==='insert').length;
+  const toOvr=importRows.filter(r=>r._action==='override').length;
+  const toUpd=importRows.filter(r=>r._action==='update_discount').length;
+  const toSkp=importRows.filter(r=>r._action==='skip').length;
+  if(toIns)parts.push(`${toIns} insert`);if(toOvr)parts.push(`${toOvr} override`);if(toUpd)parts.push(`${toUpd} update`);if(toSkp)parts.push(`${toSkp} skip`);
+  document.getElementById('dup-action-summary').textContent=parts.join(' · ');
+}
+
+async function commitImport(){
+  const btn=document.getElementById('dup-commit-btn');btn.innerHTML='⏳ Importing…';btn.disabled=true;
+  try{
+    const payload=importRows.map(r=>({sku:r.sku,service:r.service,pricing_model:r.pricing_model||'discount',discount_pct:r.discount_pct,unit_price:r.unit_price,action:r._action||(r.is_duplicate?'skip':'insert')}));
+    const res=await fetch('/discount-editor/commit-import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:payload,filename:importFilename})});
+    const data=await res.json();
+    if(data.error){toast(data.error,'error');return;}
+    closeDupModal();toast(`Import done! ${data.inserted} inserted · ${data.updated} updated · ${data.skipped} skipped`,'success');
+    document.getElementById('stat-total').textContent=data.sku_count;
+    document.getElementById('stat-services').textContent=data.service_count;
+    document.getElementById('import-status').textContent=`✅ Last import: ${data.inserted} inserted · ${data.updated} updated · ${data.skipped} skipped`;
+    location.reload();
+  }catch(e){toast('Network error: '+e.message,'error');}
+  finally{btn.innerHTML='✅ Confirm Import';btn.disabled=false;}
+}
+
+filterTable();
+</script>
+{% endblock %}

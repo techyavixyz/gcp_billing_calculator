@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: gcp_billing_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gcpauth
+      POSTGRES_USER: gcpuser
+      POSTGRES_PASSWORD: gcppassword        # ← Change in production!
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gcpuser -d gcpauth"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Flask App ───────────────────────────────────────────────
+  app:
+    build: ./gcp-price-calculator
+    container_name: gcp_billing_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: gcpauth
+      POSTGRES_USER: gcpuser
+      POSTGRES_PASSWORD: gcppassword        # ← Must match above
+      SECRET_KEY: "change-me-in-production-to-a-long-random-string"
+      # ── Optional: pre-seed SMTP via env (can also be set via UI) ──
+      # SMTP_HOST: smtp.gmail.com
+      # SMTP_PORT: 587
+      # SMTP_USER: you@gmail.com
+      # SMTP_PASSWORD: your-app-password
+      # ALERT_RECIPIENTS: alice@company.com,bob@company.com
+      # ALERT_SCHEDULE: "08:00"
+      TZ: "UTC"
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./gcp-price-calculator/GCP_Discount_applied.xlsx:/app/GCP_Discount_applied.xlsx:ro
+
+volumes:
+  postgres_data:

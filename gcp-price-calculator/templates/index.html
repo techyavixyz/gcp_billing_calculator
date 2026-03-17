@@ -1,0 +1,638 @@
+{% extends "base.html" %}
+{% block title %}Calculator — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}Billing Calculator{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Billing Calculator</h1>
+  <p>Upload a GCP billing CSV to apply discount matrix and compute final costs</p>
+</div>
+
+<div class="grid-2" style="gap:24px;align-items:start">
+  <!-- LEFT COL: Upload + Overrides -->
+  <div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><span class="card-title">Upload Billing CSV</span></div>
+      <div class="dropzone" id="dropzone" onclick="document.getElementById('file').click()">
+        <span class="dropzone-icon">📂</span>
+        <strong id="dropzone-label">Drop CSV here or click to browse</strong>
+        <p style="margin-top:6px;font-size:12px">Requires: Service description, SKU description, Usage amount, Usage unit, List cost</p>
+      </div>
+      <input type="file" id="file" accept=".csv" style="display:none" onchange="onFileChange(this)"/>
+      <div style="margin-top:16px;display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:160px">
+          <label style="display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Billing Date</label>
+          <input type="date" id="billing-date"
+                 style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:14px;font-family:var(--sans);outline:none;width:100%;transition:border-color 0.2s"
+                 onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"/>
+        </div>
+        <button class="btn btn-primary" onclick="process()" id="run-btn"><span>⚡</span> Generate &amp; Save</button>
+        <button class="btn btn-secondary" onclick="clearResults()" id="clear-btn" style="display:none">✕ Clear</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT COL: Summary stats -->
+  <div>
+    <div id="stats" style="display:none">
+      <div class="stats-grid" style="grid-template-columns:1fr 1fr;margin-bottom:20px">
+        <div class="stat-card">
+          <div class="stat-label">Total Rows</div>
+          <div class="stat-value" id="s-rows">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Matched SKUs</div>
+          <div class="stat-value yellow" id="s-matched">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">List Cost</div>
+          <div class="stat-value" id="s-list">—</div>
+          <div class="stat-sub">Before discounts</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">After Discount</div>
+          <div class="stat-value green" id="s-after">—</div>
+          <div class="stat-sub" id="s-savings-sub">—</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+        <button class="btn btn-green" onclick="dlXlsx()">⬇ Download XLSX</button>
+        <button class="btn btn-secondary" onclick="dlCsv()">⬇ Download CSV</button>
+        <a href="/export" class="btn btn-secondary">📊 Export Page →</a>
+      </div>
+    </div>
+
+    <div id="no-results" class="card" style="text-align:center;padding:48px">
+      <div style="font-size:48px;margin-bottom:16px">📄</div>
+      <p style="color:var(--muted)">Upload a CSV to see results</p>
+    </div>
+  </div>
+</div>
+
+<!-- SERVICE-WISE TOTALS TABLE -->
+<div id="svc-section" style="display:none;margin-top:28px">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">💰 Total &amp; After-Discount Amount — Service Wise</span>
+      <span id="svc-count" class="pill pill-purple"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="svc-table">
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th style="text-align:right">SKU Rows</th>
+            <th style="text-align:right">Total List Cost</th>
+            <th style="text-align:right">Total After Discount</th>
+            <th style="text-align:right">Total Savings</th>
+            <th style="text-align:right">Savings %</th>
+            <th>Coverage Bar</th>
+          </tr>
+        </thead>
+        <tbody id="svc-tbody"></tbody>
+        <tfoot id="svc-tfoot"></tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- UNMATCHED SKUs SECTION -->
+<div id="unmatched-section" style="display:none;margin-top:24px">
+  <div class="card">
+    <div class="card-header" style="flex-wrap:wrap;gap:12px">
+      <span class="card-title">⚠️ SKUs Not Matched in Discount File</span>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+        <span id="unmatched-count-pill" class="pill" style="background:rgba(239,68,68,0.12);color:#f87171;border:1px solid rgba(239,68,68,0.25)"></span>
+        <div class="search-bar" style="width:220px">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="unmatched-search" placeholder="Search unmatched..." oninput="onUnmatchedSearch()"/>
+        </div>
+        <button class="btn btn-secondary" onclick="dlUnmatchedCsv()" title="Download unmatched SKUs as CSV">⬇ Export CSV</button>
+        <button onclick="toggleUnmatchedTable()" id="unmatched-toggle-btn"
+          style="background:none;border:1px solid var(--border);border-radius:8px;padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);transition:all 0.15s">
+          ▲ Hide List
+        </button>
+      </div>
+    </div>
+
+    <!-- Info banner -->
+    <div id="unmatched-info" style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:rgba(239,68,68,0.07);border-bottom:1px solid var(--border);font-size:13px;color:var(--muted)">
+      <span style="font-size:16px">ℹ️</span>
+      <span>These SKUs have <strong style="color:var(--text)">no matching entry</strong> in the discount file — they received <strong style="color:var(--text)">0% discount</strong>. Add them to the <a href="/discount-editor" style="color:var(--accent);text-decoration:none">Discount Editor</a> to apply discounts.</span>
+    </div>
+
+    <div id="unmatched-table-wrap" class="table-wrap">
+      <table id="unmatched-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Service</th>
+            <th>SKU Description</th>
+            <th style="text-align:right">Occurrences</th>
+            <th style="text-align:right">Total List Cost</th>
+            <th style="text-align:right">Action</th>
+          </tr>
+        </thead>
+        <tbody id="unmatched-tbody"></tbody>
+      </table>
+    </div>
+
+    <div id="unmatched-pagination" style="display:flex;align-items:center;justify-content:space-between;padding:16px 0 4px;flex-wrap:wrap;gap:10px;padding-left:16px;padding-right:16px">
+      <div id="unmatched-page-info" style="font-size:13px;color:var(--muted);font-family:var(--mono)"></div>
+      <div style="display:flex;gap:6px;align-items:center" id="unmatched-page-btns"></div>
+    </div>
+  </div>
+</div>
+<div id="preview-section" style="display:none;margin-top:24px">
+  <div class="card">
+    <div class="card-header" style="flex-wrap:wrap;gap:12px">
+      <span class="card-title">📋 Generated SKU Results</span>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+        <!-- search -->
+        <div class="search-bar" style="width:220px">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="tbl-search" placeholder="Search..." oninput="onSearch()"/>
+        </div>
+        <!-- rows per page -->
+        <select id="page-size" onchange="onPageSizeChange()" style="width:auto;min-width:110px;padding:8px 10px;font-size:13px">
+          <option value="10">10 / page</option>
+          <option value="25" selected>25 / page</option>
+          <option value="50">50 / page</option>
+          <option value="100">100 / page</option>
+        </select>
+        <span id="preview-count" class="pill pill-blue"></span>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table id="preview">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Service</th>
+            <th>SKU Description</th>
+            <th>Usage Amount</th>
+            <th>Usage Unit</th>
+            <th style="text-align:right">List Cost</th>
+            <th style="text-align:right">Discount %</th>
+            <th style="text-align:right">Discounted Value</th>
+            <th style="text-align:right">After Discount</th>
+            <th style="text-align:right">Cost per Unit</th>
+          </tr>
+        </thead>
+        <tbody id="preview-body"></tbody>
+      </table>
+    </div>
+
+    <!-- PAGINATION CONTROLS -->
+    <div id="pagination" style="display:flex;align-items:center;justify-content:space-between;padding:16px 0 4px;flex-wrap:wrap;gap:10px">
+      <div id="page-info" style="font-size:13px;color:var(--muted);font-family:var(--mono)"></div>
+      <div style="display:flex;gap:6px;align-items:center" id="page-btns"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ── state ── */
+let resultData = null;
+let allRows    = [];
+let filtered   = [];
+let currentPage = 1;
+let pageSize    = 25;
+
+/* ── unmatched SKU state ── */
+let allUnmatched     = [];
+let filteredUnmatched = [];
+let unmatchedPage    = 1;
+const UNMATCHED_PAGE_SIZE = 25;
+
+
+/* ── dropzone ── */
+const dz = document.getElementById('dropzone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f) { document.getElementById('file').files; onFileChange({ files: [f] }); }
+});
+
+function onFileChange(el) {
+  const f = el.files[0];
+  if (f) document.getElementById('dropzone-label').textContent = '✓ ' + f.name;
+}
+
+/* ── process ── */
+async function process() {
+  const fi = document.getElementById('file');
+  if (!fi.files.length) { toast('Please upload a CSV first', 'error'); return; }
+  const btn = document.getElementById('run-btn');
+  btn.innerHTML = '⏳ Processing…'; btn.disabled = true;
+  const fd = new FormData();
+  fd.append('file', fi.files[0]);
+  const bd = document.getElementById('billing-date').value;
+  if (bd) fd.append('billing_date', bd); // already YYYY-MM-DD
+  try {
+    const res  = await fetch('/process', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.error) { toast(data.error, 'error'); return; }
+    resultData = data;
+    allRows    = data.csv_data;
+    filtered   = [...allRows];
+    currentPage = 1;
+    pageSize    = parseInt(document.getElementById('page-size').value);
+    showResults(data);
+    const runMsg = data.run_id ? ` · Saved as Run #${data.run_id}` : '';
+    toast('Discount applied & saved to DB!' + runMsg, 'success');
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+  finally { btn.innerHTML = '⚡ Generate &amp; Save'; btn.disabled = false; }
+}
+
+/* ── show results ── */
+function showResults(data) {
+  document.getElementById('stats').style.display           = 'block';
+  document.getElementById('no-results').style.display      = 'none';
+  document.getElementById('clear-btn').style.display       = 'inline-flex';
+  document.getElementById('preview-section').style.display = 'block';
+  document.getElementById('svc-section').style.display     = 'block';
+
+  /* stat cards */
+  document.getElementById('s-rows').textContent    = data.total_rows.toLocaleString();
+  document.getElementById('s-matched').textContent = data.matched_rows.toLocaleString();
+  document.getElementById('s-list').textContent    = fmt(data.total_list_cost);
+  document.getElementById('s-after').textContent   = fmt(data.total_after_discount);
+  const savePct = data.total_list_cost > 0
+    ? ((data.total_savings / data.total_list_cost) * 100).toFixed(1) : 0;
+  document.getElementById('s-savings-sub').textContent = `Saved ${fmt(data.total_savings)} (${savePct}%)`;
+
+  /* service-wise totals */
+  renderServiceTable(data.service_breakdown, data.total_list_cost);
+
+  /* paginated table */
+  renderPage();
+
+  /* unmatched SKUs */
+  allUnmatched      = data.unmatched_skus || [];
+  filteredUnmatched = [...allUnmatched];
+  unmatchedPage     = 1;
+  if (allUnmatched.length > 0) {
+    document.getElementById('unmatched-section').style.display = 'block';
+    document.getElementById('unmatched-count-pill').textContent =
+      allUnmatched.length.toLocaleString() + ' unmatched SKU' + (allUnmatched.length !== 1 ? 's' : '');
+    renderUnmatchedPage();
+  } else {
+    document.getElementById('unmatched-section').style.display = 'none';
+  }
+}
+
+/* ── service-wise table ── */
+function renderServiceTable(breakdown, grandTotal) {
+  document.getElementById('svc-count').textContent = breakdown.length + ' services';
+  const maxList = Math.max(...breakdown.map(s => s.list_cost));
+
+  const tbody = document.getElementById('svc-tbody');
+  tbody.innerHTML = breakdown
+    .sort((a, b) => b.list_cost - a.list_cost)
+    .map(s => {
+      const pct = s.list_cost > 0 ? ((s.savings / s.list_cost) * 100).toFixed(1) : 0;
+      const barW = maxList > 0 ? ((s.list_cost / maxList) * 100).toFixed(1) : 0;
+      const barA = maxList > 0 ? ((s.after_discount / maxList) * 100).toFixed(1) : 0;
+      return `<tr>
+        <td><strong>${s['Service description']}</strong></td>
+        <td class="mono" style="text-align:right">${s.rows.toLocaleString()}</td>
+        <td class="mono" style="text-align:right">${fmt(s.list_cost)}</td>
+        <td class="mono green" style="text-align:right">${fmt(s.after_discount)}</td>
+        <td class="mono" style="text-align:right;color:var(--yellow)">${fmt(s.savings)}</td>
+        <td class="mono" style="text-align:right;color:${pct>30?'var(--green)':pct>10?'var(--accent)':'var(--muted)'}">${pct}%</td>
+        <td style="min-width:130px">
+          <div style="position:relative;height:20px;background:var(--surface2);border-radius:4px;overflow:hidden">
+            <div style="position:absolute;left:0;top:0;height:100%;width:${barW}%;background:rgba(0,229,255,0.18);border-radius:4px"></div>
+            <div style="position:absolute;left:0;top:0;height:100%;width:${barA}%;background:var(--green);opacity:0.7;border-radius:4px"></div>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+  /* grand total footer */
+  const totalSavings = breakdown.reduce((a, s) => a + s.savings, 0);
+  const totalAfter   = breakdown.reduce((a, s) => a + s.after_discount, 0);
+  const totalRows    = breakdown.reduce((a, s) => a + s.rows, 0);
+  const totalPct     = grandTotal > 0 ? ((totalSavings / grandTotal) * 100).toFixed(1) : 0;
+  document.getElementById('svc-tfoot').innerHTML = `
+    <tr style="background:var(--surface2);font-weight:700;border-top:2px solid var(--border)">
+      <td style="color:var(--accent)">TOTAL</td>
+      <td class="mono" style="text-align:right">${totalRows.toLocaleString()}</td>
+      <td class="mono" style="text-align:right">${fmt(grandTotal)}</td>
+      <td class="mono green" style="text-align:right">${fmt(totalAfter)}</td>
+      <td class="mono" style="text-align:right;color:var(--yellow)">${fmt(totalSavings)}</td>
+      <td class="mono" style="text-align:right;color:var(--green)">${totalPct}%</td>
+      <td></td>
+    </tr>`;
+}
+
+/* ── search ── */
+function onSearch() {
+  const q = document.getElementById('tbl-search').value.toLowerCase();
+  filtered = q
+    ? allRows.filter(r =>
+        (r['SKU description']||'').toLowerCase().includes(q) ||
+        (r['Service description']||'').toLowerCase().includes(q) ||
+        (r['Usage unit']||'').toLowerCase().includes(q))
+    : [...allRows];
+  currentPage = 1;
+  renderPage();
+}
+
+function onPageSizeChange() {
+  pageSize    = parseInt(document.getElementById('page-size').value);
+  currentPage = 1;
+  renderPage();
+}
+
+/* ── render page ── */
+function renderPage() {
+  const total   = filtered.length;
+  const pages   = Math.max(1, Math.ceil(total / pageSize));
+  if (currentPage > pages) currentPage = pages;
+  const start   = (currentPage - 1) * pageSize;
+  const end     = Math.min(start + pageSize, total);
+  const rows    = filtered.slice(start, end);
+
+  /* count pill */
+  document.getElementById('preview-count').textContent =
+    total.toLocaleString() + ' rows';
+
+  /* table body */
+  const tbody = document.getElementById('preview-body');
+  tbody.innerHTML = rows.map((r, i) => {
+    const disc = r['(₹)discount %'];
+    const discColor = disc > 50 ? 'var(--green)' : disc > 20 ? 'var(--accent)' : 'var(--muted)';
+    const cpu = r['Cost per Unit'];
+    const cpuDisplay = (cpu != null && cpu !== 0)
+      ? `₹${parseFloat(cpu).toFixed(6)}`
+      : `<span style="color:var(--muted)">—</span>`;
+    return `<tr>
+      <td class="mono" style="color:var(--muted);font-size:11px">${(start+i+1).toLocaleString()}</td>
+      <td style="white-space:nowrap">${r['Service description']}</td>
+      <td style="font-size:12px;max-width:320px;word-break:break-word">${r['SKU description']}</td>
+      <td class="mono" style="text-align:right">${r['Usage amount']}</td>
+      <td style="color:var(--muted);font-size:12px">${r['Usage unit']}</td>
+      <td class="mono" style="text-align:right">${fmt(r['List cost'])}</td>
+      <td style="text-align:right"><span class="pill" style="background:${disc>0?'rgba(255,214,10,0.12)':'rgba(100,116,139,0.1)'};color:${discColor};border:1px solid ${disc>0?'rgba(255,214,10,0.25)':'var(--border)'}">${disc}%</span></td>
+      <td class="mono" style="text-align:right;color:var(--yellow)">${fmt(r['Discounted value'])}</td>
+      <td class="mono" style="text-align:right;color:var(--green);font-weight:600">${fmt(r['after Discount'])}</td>
+      <td class="mono" style="text-align:right;color:var(--accent);font-size:12px">${cpuDisplay}</td>
+    </tr>`;
+  }).join('');
+
+  /* page info */
+  document.getElementById('page-info').textContent =
+    `Showing ${(start+1).toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()} rows`;
+
+  /* pagination buttons */
+  renderPagination(pages);
+}
+
+function renderPagination(pages) {
+  const container = document.getElementById('page-btns');
+  if (pages <= 1) { container.innerHTML = ''; return; }
+
+  const range = [];
+  range.push(1);
+  if (currentPage > 4) range.push('…');
+  for (let p = Math.max(2, currentPage - 2); p <= Math.min(pages - 1, currentPage + 2); p++) range.push(p);
+  if (currentPage < pages - 3) range.push('…');
+  if (pages > 1) range.push(pages);
+
+  const btnStyle = (active) =>
+    `padding:6px 11px;border-radius:6px;font-size:13px;font-family:var(--mono);cursor:pointer;border:1px solid;transition:all 0.15s;` +
+    (active
+      ? `background:var(--accent);color:#000;border-color:var(--accent);font-weight:700`
+      : `background:var(--surface2);color:var(--text);border-color:var(--border)`);
+
+  container.innerHTML =
+    `<button style="${btnStyle(false)}" onclick="goPage(${currentPage-1})" ${currentPage===1?'disabled style="opacity:0.3;cursor:default"':''}>‹ Prev</button>` +
+    range.map(p => p === '…'
+      ? `<span style="padding:6px 4px;color:var(--muted);font-family:var(--mono)">…</span>`
+      : `<button style="${btnStyle(p===currentPage)}" onclick="goPage(${p})">${p}</button>`
+    ).join('') +
+    `<button style="${btnStyle(false)}" onclick="goPage(${currentPage+1})" ${currentPage===pages?'disabled style="opacity:0.3;cursor:default"':''}>Next ›</button>`;
+}
+
+function goPage(p) {
+  const pages = Math.ceil(filtered.length / pageSize);
+  if (p < 1 || p > pages) return;
+  currentPage = p;
+  renderPage();
+  document.getElementById('preview-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ── clear ── */
+function clearResults() {
+  resultData = null; allRows = []; filtered = [];
+  allUnmatched = []; filteredUnmatched = [];
+  document.getElementById('stats').style.display           = 'none';
+  document.getElementById('no-results').style.display      = 'block';
+  document.getElementById('preview-section').style.display = 'none';
+  document.getElementById('svc-section').style.display     = 'none';
+  document.getElementById('unmatched-section').style.display = 'none';
+  document.getElementById('clear-btn').style.display       = 'none';
+  document.getElementById('email-run-btn').style.display   = 'none';
+  document.getElementById('dropzone-label').textContent    = 'Drop CSV here or click to browse';
+  document.getElementById('file').value = '';
+  document.getElementById('tbl-search').value = '';
+  document.getElementById('unmatched-search').value = '';
+}
+
+/* ── downloads ── */
+async function dlXlsx() {
+  if (!resultData) { toast('Run calculator first', 'error'); return; }
+  const res = await fetch('/download/xlsx', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: resultData.csv_data, summary: {
+      total_rows: resultData.total_rows, matched_rows: resultData.matched_rows,
+      total_list_cost: resultData.total_list_cost,
+      total_after_discount: resultData.total_after_discount,
+      total_savings: resultData.total_savings }})
+  });
+  const blob = await res.blob();
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'gcp_discounted_billing.xlsx'; a.click();
+  toast('XLSX downloaded!', 'success');
+}
+async function dlCsv() {
+  if (!resultData) { toast('Run calculator first', 'error'); return; }
+  const res = await fetch('/download/csv', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: resultData.csv_data })
+  });
+  const blob = await res.blob();
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'gcp_discounted_billing.csv'; a.click();
+  toast('CSV downloaded!', 'success');
+}
+
+/* ── Unmatched SKU search ── */
+function onUnmatchedSearch() {
+  const q = document.getElementById('unmatched-search').value.toLowerCase();
+  filteredUnmatched = q
+    ? allUnmatched.filter(r =>
+        (r['SKU description']||'').toLowerCase().includes(q) ||
+        (r['Service description']||'').toLowerCase().includes(q))
+    : [...allUnmatched];
+  unmatchedPage = 1;
+  renderUnmatchedPage();
+}
+
+/* ── Toggle unmatched table visibility ── */
+function toggleUnmatchedTable() {
+  const wrap = document.getElementById('unmatched-table-wrap');
+  const pagination = document.getElementById('unmatched-pagination');
+  const btn  = document.getElementById('unmatched-toggle-btn');
+  const info = document.getElementById('unmatched-info');
+  const hidden = wrap.style.display === 'none';
+  wrap.style.display       = hidden ? '' : 'none';
+  pagination.style.display = hidden ? '' : 'none';
+  info.style.display       = hidden ? '' : 'none';
+  btn.textContent          = hidden ? '▲ Hide List' : '▼ Show List';
+}
+
+/* ── Render unmatched page ── */
+function renderUnmatchedPage() {
+  const total  = filteredUnmatched.length;
+  const pages  = Math.max(1, Math.ceil(total / UNMATCHED_PAGE_SIZE));
+  if (unmatchedPage > pages) unmatchedPage = pages;
+  const start  = (unmatchedPage - 1) * UNMATCHED_PAGE_SIZE;
+  const end    = Math.min(start + UNMATCHED_PAGE_SIZE, total);
+  const rows   = filteredUnmatched.slice(start, end);
+
+  const tbody = document.getElementById('unmatched-tbody');
+  tbody.innerHTML = rows.map((r, i) => {
+    const sku = (r['SKU description']||'').replace(/</g,'&lt;');
+    const svc = (r['Service description']||'').replace(/</g,'&lt;');
+    const cost = r['total_list_cost'] || 0;
+    const occ  = r['occurrences'] || 0;
+    // encode for add-to-discount link
+    const encSku = encodeURIComponent(r['SKU description']||'');
+    const encSvc = encodeURIComponent(r['Service description']||'');
+    return `<tr>
+      <td class="mono" style="color:var(--muted);font-size:11px">${(start+i+1).toLocaleString()}</td>
+      <td style="white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${svc}">${svc}</td>
+      <td style="font-size:12px;max-width:340px;word-break:break-word">${sku}</td>
+      <td class="mono" style="text-align:right;color:var(--muted)">${occ.toLocaleString()}</td>
+      <td class="mono" style="text-align:right;color:var(--yellow);font-weight:600">${fmt(cost)}</td>
+      <td style="text-align:right">
+        <a href="/discount-editor?prefill_sku=${encSku}&prefill_svc=${encSvc}"
+           style="font-size:11px;padding:4px 10px;border-radius:6px;background:rgba(26,86,219,0.12);color:var(--accent);border:1px solid rgba(26,86,219,0.25);text-decoration:none;white-space:nowrap;transition:all 0.15s"
+           title="Open Discount Editor to add this SKU">+ Add Discount</a>
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('unmatched-page-info').textContent =
+    total > 0
+      ? `Showing ${(start+1).toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()} unmatched SKUs`
+      : 'No unmatched SKUs match your search';
+
+  renderUnmatchedPagination(pages);
+}
+
+function renderUnmatchedPagination(pages) {
+  const container = document.getElementById('unmatched-page-btns');
+  if (pages <= 1) { container.innerHTML = ''; return; }
+  const range = [1];
+  if (unmatchedPage > 4) range.push('…');
+  for (let p = Math.max(2, unmatchedPage-2); p <= Math.min(pages-1, unmatchedPage+2); p++) range.push(p);
+  if (unmatchedPage < pages-3) range.push('…');
+  if (pages > 1) range.push(pages);
+  const btnStyle = (active) =>
+    `padding:6px 11px;border-radius:6px;font-size:13px;font-family:var(--mono);cursor:pointer;border:1px solid;transition:all 0.15s;` +
+    (active
+      ? `background:var(--accent);color:#000;border-color:var(--accent);font-weight:700`
+      : `background:var(--surface2);color:var(--text);border-color:var(--border)`);
+  container.innerHTML =
+    `<button style="${btnStyle(false)}" onclick="goUnmatchedPage(${unmatchedPage-1})" ${unmatchedPage===1?'disabled style="opacity:0.3;cursor:default"':''}>‹ Prev</button>` +
+    range.map(p => p==='…'
+      ? `<span style="padding:6px 4px;color:var(--muted);font-family:var(--mono)">…</span>`
+      : `<button style="${btnStyle(p===unmatchedPage)}" onclick="goUnmatchedPage(${p})">${p}</button>`
+    ).join('') +
+    `<button style="${btnStyle(false)}" onclick="goUnmatchedPage(${unmatchedPage+1})" ${unmatchedPage===pages?'disabled style="opacity:0.3;cursor:default"':''}>Next ›</button>`;
+}
+
+function goUnmatchedPage(p) {
+  const pages = Math.ceil(filteredUnmatched.length / UNMATCHED_PAGE_SIZE);
+  if (p < 1 || p > pages) return;
+  unmatchedPage = p;
+  renderUnmatchedPage();
+  document.getElementById('unmatched-section').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+/* ── Export unmatched SKUs as CSV ── */
+function dlUnmatchedCsv() {
+  if (!allUnmatched.length) { toast('No unmatched SKUs to export', 'error'); return; }
+  const header = ['Service description','SKU description','Occurrences','Total List Cost'];
+  const rows   = filteredUnmatched.map(r =>
+    [r['Service description'], r['SKU description'], r['occurrences'], r['total_list_cost']]
+      .map(v => `"${String(v||'').replace(/"/g,'""')}"`)
+      .join(',')
+  );
+  const csv  = [header.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type:'text/csv' });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = 'unmatched_skus.csv';
+  a.click();
+  toast('Unmatched SKUs CSV downloaded!', 'success');
+}
+
+async function sendEmailForCurrentRun() {
+  const btn   = document.getElementById('email-run-btn');
+  const runId = btn.dataset.runId;
+  if (!runId) { toast('No run ID — save a billing run first', 'error'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Sending…';
+
+  try {
+    const res  = await fetch(`/alerts/send-for-run/${runId}`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.job_id) {
+      toast(data.message || 'Failed to start send', 'error');
+      btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+      return;
+    }
+    const started = Date.now();
+    const poll = setInterval(async () => {
+      try {
+        const sr   = await fetch('/alerts/test/status/' + data.job_id);
+        const stat = await sr.json();
+        if (stat.status === 'done') {
+          clearInterval(poll);
+          toast('✓ Email sent for Run #' + runId + '!', 'success');
+          btn.disabled = false; btn.innerHTML = '✅ Email Sent';
+          setTimeout(() => { btn.innerHTML = '📧 Send Email Report'; }, 4000);
+        } else if (stat.status === 'error') {
+          clearInterval(poll);
+          toast('✗ ' + (stat.message || 'Send failed'), 'error');
+          btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+        } else if (Date.now() - started > 60000) {
+          clearInterval(poll);
+          toast('⏱ Timed out — check Email Alerts send log', 'info');
+          btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+        }
+      } catch(e) {
+        clearInterval(poll);
+        toast('✗ ' + e.message, 'error');
+        btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+      }
+    }, 1200);
+  } catch(e) {
+    toast('✗ ' + e.message, 'error');
+    btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+  }
+}
+</script>
+{% endblock %}

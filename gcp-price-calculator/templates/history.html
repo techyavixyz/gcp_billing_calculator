@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}History — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}Billing History{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div>
+    <h1>Billing History</h1>
+    <p>All processed billing runs stored in PostgreSQL — click a row to view full detail</p>
+  </div>
+  <a href="/" class="btn btn-primary">⚡ New Run</a>
+</div>
+
+{% if runs %}
+<!-- Summary strip -->
+<div class="stats-grid" style="margin-bottom:28px">
+  <div class="stat-card">
+    <div class="stat-label">Total Runs</div>
+    <div class="stat-value">{{ runs|length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total List Cost</div>
+    <div class="stat-value mono" id="sum-list">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total After Discount</div>
+    <div class="stat-value green mono" id="sum-after">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Savings</div>
+    <div class="stat-value" style="color:var(--yellow)" id="sum-savings">—</div>
+  </div>
+</div>
+
+<!-- Filter bar -->
+<div class="filter-row" style="margin-bottom:16px">
+  <div class="search-bar" style="flex:1;max-width:320px">
+    <span class="search-icon">🔍</span>
+    <input type="text" id="search-input" placeholder="Search file name or user…" oninput="filterTable()"/>
+  </div>
+  <select id="user-filter" onchange="filterTable()" style="width:auto;min-width:140px">
+    <option value="">All users</option>
+    {% set users = runs|map(attribute='uploaded_by')|unique|list %}
+    {% for u in users %}<option value="{{ u }}">{{ u }}</option>{% endfor %}
+  </select>
+  <select id="month-filter" onchange="filterTable()" style="width:auto;min-width:160px">
+    <option value="">All months</option>
+    {% set months = [] %}
+    {% for r in runs %}
+      {% if r.billing_date %}
+        {% set m = r.billing_date.strftime('%b %Y') %}
+        {% if m not in months %}{% set _ = months.append(m) %}{% endif %}
+      {% endif %}
+    {% endfor %}
+    {% for m in months|sort(reverse=True) %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+  </select>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <div class="table-wrap" style="border:none">
+    <table id="runs-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>File / Run Name</th>
+          <th>Billing Date</th>
+          <th>Processed At</th>
+          <th>Uploaded By</th>
+          <th style="text-align:right">Rows</th>
+          <th style="text-align:right">List Cost</th>
+          <th style="text-align:right">After Discount</th>
+          <th style="text-align:right">Savings</th>
+          <th style="text-align:center">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="runs-tbody">
+        {% for r in runs %}
+        <tr class="run-row"
+            data-name="{{ r.run_name or '' }}"
+            data-user="{{ r.uploaded_by or '' }}"
+            data-month="{{ r.billing_date.strftime('%Y-%m-%d') if r.billing_date else '' }}"
+            style="cursor:pointer"
+            onclick="window.location='/history/{{ r.id }}'">
+          <td><span class="pill pill-blue mono">{{ r.id }}</span></td>
+          <td>
+            <div style="font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ r.run_name }}">
+              {{ r.run_name or '—' }}
+            </div>
+          </td>
+          <td>
+            {% if r.billing_date %}
+              <span class="pill pill-purple mono">{{ r.billing_date.strftime('%d %b %Y') }}</span>
+            {% else %}
+              <span style="color:var(--muted);font-size:12px">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="mono" style="font-size:12px">{{ r.processed_at.strftime('%d %b %Y') }}</div>
+            <div style="font-size:11px;color:var(--muted)">{{ r.processed_at.strftime('%H:%M:%S') }} UTC</div>
+          </td>
+          <td>
+            <div style="display:flex;align-items:center;gap:6px">
+              <div style="width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#000;flex-shrink:0">
+                {{ (r.uploaded_by or '?')[0].upper() }}
+              </div>
+              <span style="font-size:13px">{{ r.uploaded_by or '—' }}</span>
+            </div>
+          </td>
+          <td class="mono" style="text-align:right">{{ '{:,}'.format(r.total_rows or 0) }}</td>
+          <td class="mono" style="text-align:right">₹{{ '{:,.2f}'.format(r.total_list_cost or 0) }}</td>
+          <td class="mono green" style="text-align:right">₹{{ '{:,.2f}'.format(r.total_after_discount or 0) }}</td>
+          <td class="mono" style="text-align:right;color:var(--yellow)">₹{{ '{:,.2f}'.format(r.total_savings or 0) }}</td>
+          <td style="text-align:center" onclick="event.stopPropagation()">
+            <div style="display:flex;gap:6px;justify-content:center">
+              <a href="/history/{{ r.id }}/download/xlsx"
+                 class="btn btn-secondary btn-sm" title="Download XLSX">⬇ XLSX</a>
+              {% if current_user.role == 'admin' %}
+              <button class="btn btn-danger btn-sm"
+                      onclick="deleteRun({{ r.id }}, this)" title="Delete run">🗑</button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card" style="text-align:center;padding:60px">
+  <div style="font-size:52px;margin-bottom:16px">🗂️</div>
+  <h2 style="margin-bottom:8px;font-size:18px">No billing runs yet</h2>
+  <p style="color:var(--muted);margin-bottom:24px">Upload a GCP billing CSV from the Calculator to save your first run.</p>
+  <a href="/" class="btn btn-primary">⚡ Go to Calculator</a>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ── aggregate totals ─────────────────────────────────────────────── */
+const rows = Array.from(document.querySelectorAll('.run-row'));
+function calcTotals(subset) {
+  let list=0, after=0, sav=0;
+  subset.forEach(tr => {
+    list  += parseFloat(tr.querySelector('td:nth-child(7)').textContent.replace(/[₹,]/g,'')) || 0;
+    after += parseFloat(tr.querySelector('td:nth-child(8)').textContent.replace(/[₹,]/g,'')) || 0;
+    sav   += parseFloat(tr.querySelector('td:nth-child(9)').textContent.replace(/[₹,]/g,'')) || 0;
+  });
+  const fmt = n => '₹'+n.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+  document.getElementById('sum-list').textContent    = fmt(list);
+  document.getElementById('sum-after').textContent   = fmt(after);
+  document.getElementById('sum-savings').textContent = fmt(sav);
+}
+calcTotals(rows);
+
+/* ── filter ──────────────────────────────────────────────────────── */
+function filterTable() {
+  const q    = document.getElementById('search-input').value.toLowerCase();
+  const user = document.getElementById('user-filter').value;
+  const mon  = document.getElementById('month-filter').value;
+  const vis  = rows.filter(tr => {
+    const matchQ = !q    || tr.dataset.name.toLowerCase().includes(q) || tr.dataset.user.toLowerCase().includes(q);
+    const matchU = !user || tr.dataset.user === user;
+    const matchM = !mon  || tr.dataset.month === mon;
+    return matchQ && matchU && matchM;
+  });
+  rows.forEach(tr => tr.style.display = 'none');
+  vis.forEach(tr  => tr.style.display = '');
+  calcTotals(vis);
+}
+
+/* ── delete ──────────────────────────────────────────────────────── */
+async function deleteRun(id, btn) {
+  if (!confirm(`Delete Run #${id} and all its data permanently?`)) return;
+  btn.disabled = true; btn.textContent = '…';
+  const res = await fetch(`/history/${id}/delete`, {method:'POST'});
+  const d   = await res.json();
+  if (d.ok) {
+    const tr = btn.closest('tr');
+    tr.style.transition = 'opacity 0.3s'; tr.style.opacity = '0';
+    setTimeout(() => { tr.remove(); calcTotals(Array.from(document.querySelectorAll('.run-row:not([style*="display: none"])'))); }, 300);
+    toast('Run #'+id+' deleted', 'success');
+  } else {
+    btn.disabled = false; btn.textContent = '🗑';
+    toast(d.error || 'Delete failed', 'error');
+  }
+}
+</script>
+{% endblock %}

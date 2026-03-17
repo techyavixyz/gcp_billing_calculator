@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}SKU Overrides — GCP Billing Tool{% endblock %}
+{% block breadcrumb %}SKU Override Editor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>SKU Override Editor</h1>
+  <p>Customise discount percentages per SKU. Overrides are saved locally and applied at calculation time.</p>
+</div>
+
+<div class="grid-2" style="gap:24px;align-items:start">
+  <div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><span class="card-title">Add Override</span></div>
+
+      <div class="input-group">
+        <label>Service Filter</label>
+        <select id="svc-sel" onchange="filterSkus()">
+          <option value="">All Services</option>
+          {% for s in services %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="input-group">
+        <label>Search & Select SKU</label>
+        <div class="search-bar" style="margin-bottom:6px">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="sku-search" placeholder="Type to filter SKUs..." oninput="filterSkus()"/>
+        </div>
+        <select id="sku-sel" size="6" style="font-size:12px;font-family:var(--mono);height:140px">
+          {% for s in skus %}
+          <option value="{{ s.sku }}" data-service="{{ s.service }}" data-default="{{ s.discount_pct }}">{{ s.sku }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="input-group">
+        <label>Custom Discount %</label>
+        <input type="number" id="disc-val" min="0" max="100" step="0.1" placeholder="e.g. 15.5"/>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-primary" onclick="addOverride()">+ Add Override</button>
+        <button class="btn btn-secondary" onclick="prefillDefault()">Use Default</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Quick Override</span>
+      </div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:12px">Set a flat discount for all SKUs in a service</p>
+      <div class="input-group">
+        <label>Service</label>
+        <select id="bulk-svc">
+          {% for s in services %}<option>{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="input-group">
+        <label>Discount %</label>
+        <input type="number" id="bulk-disc" min="0" max="100" step="0.1" placeholder="e.g. 20"/>
+      </div>
+      <button class="btn btn-secondary" onclick="bulkOverride()">Apply to All SKUs in Service</button>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Active Overrides</span>
+        <div style="display:flex;gap:8px">
+          <span id="override-count" class="pill pill-yellow">0</span>
+          <button class="btn btn-danger btn-sm" onclick="clearAll()">Clear All</button>
+        </div>
+      </div>
+      <div id="override-list" style="max-height:480px;overflow-y:auto"></div>
+      <div id="no-overrides" style="text-align:center;padding:40px;color:var(--muted)">
+        <div style="font-size:32px;margin-bottom:8px">✏️</div>
+        <p>No overrides yet</p>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn btn-secondary" onclick="exportOverrides()">⬇ Export JSON</button>
+      <button class="btn btn-secondary" onclick="document.getElementById('import-input').click()">⬆ Import JSON</button>
+      <input type="file" id="import-input" accept=".json" style="display:none" onchange="importOverrides(this)"/>
+      <a href="/" class="btn btn-primary">⚡ Run Calculator →</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const allSkus = {{ skus | tojson }};
+let overrides = JSON.parse(localStorage.getItem('gcp_overrides') || '{}');
+
+function filterSkus(){
+  const q = document.getElementById('sku-search').value.toLowerCase();
+  const svc = document.getElementById('svc-sel').value;
+  const sel = document.getElementById('sku-sel');
+  sel.innerHTML = allSkus
+    .filter(s=>(!svc||s.service===svc)&&(!q||s.sku.toLowerCase().includes(q)))
+    .map(s=>`<option value="${s.sku}" data-service="${s.service}" data-default="${s.discount_pct}">${s.sku}</option>`)
+    .join('');
+}
+
+function prefillDefault(){
+  const sel = document.getElementById('sku-sel');
+  const opt = sel.options[sel.selectedIndex];
+  if(opt) document.getElementById('disc-val').value = opt.getAttribute('data-default');
+}
+
+function addOverride(){
+  const sel = document.getElementById('sku-sel');
+  const opt = sel.options[sel.selectedIndex];
+  const disc = parseFloat(document.getElementById('disc-val').value);
+  if(!opt){toast('Select a SKU','error');return;}
+  if(isNaN(disc)||disc<0||disc>100){toast('Enter a valid discount (0–100)','error');return;}
+  overrides[opt.value] = disc;
+  save();
+  toast(`Override set: ${disc}%`,'success');
+}
+
+function bulkOverride(){
+  const svc = document.getElementById('bulk-svc').value;
+  const disc = parseFloat(document.getElementById('bulk-disc').value);
+  if(isNaN(disc)){toast('Enter a discount','error');return;}
+  let count=0;
+  allSkus.filter(s=>s.service===svc).forEach(s=>{overrides[s.sku]=disc;count++;});
+  save();
+  toast(`Applied ${disc}% to ${count} SKUs in ${svc}`,'success');
+}
+
+function removeOverride(sku){
+  delete overrides[sku];
+  save();
+  toast('Override removed','info');
+}
+
+function clearAll(){
+  if(!confirm('Clear all overrides?'))return;
+  overrides={};
+  save();
+  toast('All overrides cleared','info');
+}
+
+function save(){
+  localStorage.setItem('gcp_overrides', JSON.stringify(overrides));
+  renderOverrides();
+}
+
+function renderOverrides(){
+  const keys = Object.keys(overrides);
+  document.getElementById('override-count').textContent = keys.length;
+  document.getElementById('no-overrides').style.display = keys.length?'none':'block';
+  const list = document.getElementById('override-list');
+  if(!keys.length){list.innerHTML='';return;}
+  list.innerHTML = keys.map(sku=>`
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;min-width:0">
+        <div class="mono" style="font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sku}</div>
+      </div>
+      <span class="pill pill-yellow">${overrides[sku]}%</span>
+      <button class="btn btn-danger btn-sm" onclick="removeOverride(${JSON.stringify(sku)})">✕</button>
+    </div>`).join('');
+}
+
+function exportOverrides(){
+  const blob = new Blob([JSON.stringify(overrides, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');a.href=URL.createObjectURL(blob);a.download='gcp_overrides.json';a.click();
+  toast('Exported!','success');
+}
+function importOverrides(input){
+  const f=input.files[0];if(!f)return;
+  const r=new FileReader();
+  r.onload=e=>{
+    try{const d=JSON.parse(e.target.result);Object.assign(overrides,d);save();toast(`Imported ${Object.keys(d).length} overrides`,'success');}
+    catch(err){toast('Invalid JSON','error');}
+  };r.readAsText(f);
+}
+
+renderOverrides();
+</script>
+{% endblock %}

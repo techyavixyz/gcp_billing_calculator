@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}Run #{{ run.id }} — GCP Billing History{% endblock %}
+{% block breadcrumb %}History / Run #{{ run.id }}{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div>
+    <h1>Run #{{ run.id }}</h1>
+    <p style="word-break:break-all">{{ run.run_name or 'Unnamed run' }}</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <a href="/history/{{ run.id }}/download/xlsx" class="btn btn-green">⬇ Download XLSX</a>
+    <button class="btn btn-secondary" onclick="sendEmailForRun({{ run.id }})" id="email-btn">📧 Send Email Report</button>
+    <a href="/history" class="btn btn-secondary">← Back to History</a>
+  </div>
+</div>
+
+<!-- Meta strip -->
+<div class="stats-grid" style="margin-bottom:28px">
+  <div class="stat-card">
+    <div class="stat-label">Billing Date</div>
+    <div class="stat-value mono" style="font-size:20px">
+      {% if run.billing_date %}{{ run.billing_date.strftime('%d %b %Y') }}{% else %}—{% endif %}
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Processed At</div>
+    <div class="stat-value mono" style="font-size:16px">{{ run.processed_at.strftime('%d %b %Y') }}</div>
+    <div class="stat-sub">{{ run.processed_at.strftime('%H:%M:%S') }} UTC</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Uploaded By</div>
+    <div class="stat-value" style="font-size:18px">{{ run.uploaded_by or '—' }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Rows</div>
+    <div class="stat-value">{{ '{:,}'.format(run.total_rows or 0) }}</div>
+    <div class="stat-sub">{{ '{:,}'.format(run.matched_rows or 0) }} matched SKUs</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">List Cost</div>
+    <div class="stat-value mono" style="font-size:18px">₹{{ '{:,.2f}'.format(run.total_list_cost or 0) }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">After Discount</div>
+    <div class="stat-value green mono" style="font-size:18px">₹{{ '{:,.2f}'.format(run.total_after_discount or 0) }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Savings</div>
+    <div class="stat-value mono" style="font-size:18px;color:var(--yellow)">₹{{ '{:,.2f}'.format(run.total_savings or 0) }}</div>
+    {% if run.total_list_cost %}
+    <div class="stat-sub">{{ '%.1f'|format((run.total_savings / run.total_list_cost * 100)) }}% saved</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Service breakdown -->
+{% if run.services %}
+<div class="card" style="margin-bottom:24px">
+  <div class="card-header">
+    <span class="card-title">💰 Service-Wise Breakdown</span>
+    <span class="pill pill-blue">{{ run.services|length }} services</span>
+  </div>
+  <div class="table-wrap" style="border:none;margin-top:8px">
+    <table>
+      <thead>
+        <tr>
+          <th>Service</th>
+          <th style="text-align:right">Rows</th>
+          <th style="text-align:right">List Cost</th>
+          <th style="text-align:right">After Discount</th>
+          <th style="text-align:right">Savings</th>
+          <th style="text-align:right">Savings %</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in run.services %}
+        <tr>
+          <td><strong>{{ s.service_name }}</strong></td>
+          <td class="mono" style="text-align:right">{{ '{:,}'.format(s.row_count or 0) }}</td>
+          <td class="mono" style="text-align:right">₹{{ '{:,.2f}'.format(s.list_cost or 0) }}</td>
+          <td class="mono green" style="text-align:right">₹{{ '{:,.2f}'.format(s.after_discount or 0) }}</td>
+          <td class="mono" style="text-align:right;color:var(--yellow)">₹{{ '{:,.2f}'.format(s.savings or 0) }}</td>
+          <td class="mono" style="text-align:right">
+            {% if s.list_cost %}
+              <span style="color:{% if (s.savings/s.list_cost*100) > 30 %}var(--green){% elif (s.savings/s.list_cost*100) > 10 %}var(--accent){% else %}var(--muted){% endif %}">
+                {{ '%.1f'|format(s.savings / s.list_cost * 100) }}%
+              </span>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Row detail -->
+{% if run.rows %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">📋 Row Detail</span>
+    <span class="pill pill-blue">
+      {% if run.rows|length == 500 %}First 500 rows{% else %}{{ run.rows|length }} rows{% endif %}
+    </span>
+  </div>
+  <div style="margin-bottom:12px">
+    <div class="search-bar" style="max-width:340px">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="row-search" placeholder="Filter by SKU or service…" oninput="filterRows()"/>
+    </div>
+  </div>
+  <div class="table-wrap" style="border:none;max-height:520px;overflow-y:auto">
+    <table>
+      <thead style="position:sticky;top:0;z-index:5">
+        <tr>
+          <th>Service</th>
+          <th>SKU</th>
+          <th style="text-align:right">Usage</th>
+          <th>Unit</th>
+          <th style="text-align:right">List Cost</th>
+          <th style="text-align:right">Discount %</th>
+          <th style="text-align:right">Discounted</th>
+          <th style="text-align:right">After Disc.</th>
+          <th style="text-align:right">Cost / Unit</th>
+        </tr>
+      </thead>
+      <tbody id="rows-tbody">
+        {% for r in run.rows %}
+        <tr class="detail-row">
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ r.service_desc }}">{{ r.service_desc }}</td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--muted)" title="{{ r.sku_desc }}">{{ r.sku_desc }}</td>
+          <td class="mono" style="text-align:right">{{ r.usage_amount }}</td>
+          <td style="font-size:12px;color:var(--muted)">{{ r.usage_unit }}</td>
+          <td class="mono" style="text-align:right">₹{{ '{:,.4f}'.format(r.list_cost or 0) }}</td>
+          <td class="mono" style="text-align:right;color:{% if (r.discount_pct or 0) > 0 %}var(--accent){% else %}var(--muted){% endif %}">
+            {{ r.discount_pct or 0 }}%
+          </td>
+          <td class="mono" style="text-align:right;color:var(--yellow)">₹{{ '{:,.4f}'.format(r.discounted_value or 0) }}</td>
+          <td class="mono green" style="text-align:right">₹{{ '{:,.4f}'.format(r.after_discount or 0) }}</td>
+          <td class="mono" style="text-align:right;color:var(--accent);font-size:12px">
+            {% if r.cost_per_unit and r.cost_per_unit != 0 %}
+              ₹{{ '{:,.6f}'.format(r.cost_per_unit) }}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterRows() {
+  const q = document.getElementById('row-search').value.toLowerCase();
+  document.querySelectorAll('.detail-row').forEach(tr => {
+    const txt = tr.textContent.toLowerCase();
+    tr.style.display = !q || txt.includes(q) ? '' : 'none';
+  });
+}
+
+/* ── Send email for this run ── */
+async function sendEmailForRun(runId) {
+  const btn = document.getElementById('email-btn');
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Sending…';
+
+  try {
+    const res  = await fetch(`/alerts/send-for-run/${runId}`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.job_id) {
+      toast(data.message || 'Failed to start send', 'error');
+      btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+      return;
+    }
+    // poll for result
+    const started = Date.now();
+    const poll = setInterval(async () => {
+      try {
+        const sr   = await fetch('/alerts/test/status/' + data.job_id);
+        const stat = await sr.json();
+        if (stat.status === 'done') {
+          clearInterval(poll);
+          toast('✓ Email sent successfully!', 'success');
+          btn.disabled = false; btn.innerHTML = '✅ Email Sent';
+          setTimeout(() => { btn.innerHTML = '📧 Send Email Report'; }, 4000);
+        } else if (stat.status === 'error') {
+          clearInterval(poll);
+          toast('✗ ' + (stat.message || 'Send failed'), 'error');
+          btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+        } else if (Date.now() - started > 60000) {
+          clearInterval(poll);
+          toast('⏱ Timed out — check Email Alerts send log', 'info');
+          btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+        }
+      } catch(e) {
+        clearInterval(poll);
+        toast('✗ ' + e.message, 'error');
+        btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+      }
+    }, 1200);
+  } catch(e) {
+    toast('✗ ' + e.message, 'error');
+    btn.disabled = false; btn.innerHTML = '📧 Send Email Report';
+  }
+}
+
+/* ── Toast ── */
+function toast(msg, type='info') {
+  const colors = { success:'var(--green)', error:'var(--red)', warn:'var(--yellow)', info:'var(--accent)' };
+  const t = document.createElement('div');
+  t.style.cssText = `position:fixed;bottom:28px;right:28px;z-index:9999;background:var(--surface);border:1px solid ${colors[type]};color:${colors[type]};padding:12px 20px;border-radius:10px;font-family:var(--mono);font-size:12px;box-shadow:0 8px 32px rgba(0,0,0,0.4);transition:opacity 0.4s;max-width:360px`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity='0'; setTimeout(() => t.remove(), 400); }, 3500);
+}
+</script>
+{% endblock %}
